@@ -1,0 +1,65 @@
+{
+  "dte_window": {
+    "day": [
+      0,
+      14
+    ],
+    "swing": [
+      14,
+      120
+    ]
+  },
+  "strike_range_pct": {
+    "day": 0.06,
+    "swing": 0.15
+  },
+  "listing_horizon_days": 180,
+  "max_spread_pct": {
+    "day": 0.1,
+    "swing": 0.12
+  },
+  "very_wide_spread_pct": 0.25,
+  "spread_floor": 0.05,
+  "min_volume": {
+    "day": 100,
+    "swing": 25
+  },
+  "min_open_interest": {
+    "day": 500,
+    "swing": 250
+  },
+  "max_quote_age_seconds": {
+    "day": 120,
+    "swing": 900
+  },
+  "max_oi_age_days": 5,
+  "delta_band": {
+    "day": [
+      0.35,
+      0.7
+    ],
+    "swing": [
+      0.4,
+      0.8
+    ]
+  },
+  "target_delta": {
+    "day": 0.5,
+    "swing": 0.6
+  },
+  "max_iv": 5.0,
+  "short_dated_dte": 7,
+  "heavy_decay_pct": {
+    "day": 0.15,
+    "swing": 0.03
+  },
+  "max_listed": 80,
+  "max_compared": 5,
+  "weights": {
+    "spread": 20,
+    "activity": 15,
+    "delta_fit": 25,
+    "time_decay": 20,
+    "payoff": 20
+  }
+}

@@ -38,6 +38,7 @@ class Settings:
     alpaca_trading_url: str = "https://paper-api.alpaca.markets"  # only /v2/calendar is used
     alpaca_feed: str = "iex"
     alpaca_adjustment: str = "split"
+    alpaca_options_feed: str = "indicative"  # indicative (free) | opra (Algo Trader Plus)
     alpaca_rate_limit_per_min: int = 190
     alpaca_max_retries: int = 3
     alpaca_timeout_seconds: float = 15.0
@@ -75,6 +76,7 @@ def load_settings() -> Settings:
         alpaca_trading_url=env("ALPACA_TRADING_URL", "https://paper-api.alpaca.markets"),
         alpaca_feed=env("ALPACA_FEED", "iex").strip().lower(),
         alpaca_adjustment=env("ALPACA_ADJUSTMENT", "split").strip().lower(),
+        alpaca_options_feed=env("ALPACA_OPTIONS_FEED", "indicative").strip().lower(),
         alpaca_rate_limit_per_min=int(env("ALPACA_RATE_LIMIT_PER_MIN", "190")),
         alpaca_max_retries=int(env("ALPACA_MAX_RETRIES", "3")),
         alpaca_timeout_seconds=float(env("ALPACA_TIMEOUT_SECONDS", "15")),

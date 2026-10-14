@@ -137,6 +137,11 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   cooldowns with a controllable clock; stale, unavailable and incomplete data never
   producing an actionable alert; preferences, price levels, the webhook (and that its URL
   never leaks), the API, and alerts created by the background scheduler with no client.
+- **Options analysis** (`tests/test_options.py`, in-process fake of Alpaca's options
+  endpoints, test data only): parsing and pagination without filling gaps, spreads,
+  liquidity filters (volume, open interest), stale quotes and underlying data, missing or
+  inconsistent Greeks/IV, call/put selection, the recommendation gates (feed, market hours,
+  setup status), capped scenario estimates, stock- vs option-level risk, and the API.
 - **Engine, demo data and API.**
 
 ## How it works
@@ -897,6 +902,92 @@ old events.
 The old setup-engine "FORMING/ACTIONABLE" alerts were removed. "Recently detected setups"
 and the immutable signal log (`/api/strategies/signals`) are still recorded.
 
+### Options analysis (`backend/app/options`)
+
+The **Options** tab evaluates option contracts for a detected stock setup. It is analysis
+only: there is no options (or any) order execution anywhere in TradeScope.
+
+**Data (Alpaca).** These endpoints were checked against the official `alpaca-py` SDK:
+
+| Data | Endpoint | Fields |
+| --- | --- | --- |
+| Contract list | `GET {trading}/v2/options/contracts` | call/put, strike, expiration, style, multiplier, tradable, **open interest** (+ date) |
+| Chain snapshots | `GET {data}/v1beta1/options/snapshots/{underlying}` | bid/ask (+ sizes, time), last trade, daily **volume**, **implied volatility**, **delta, gamma, theta, vega** (rho) |
+
+- **Feeds** (`ALPACA_OPTIONS_FEED`):
+  - `indicative` is free. Its quotes are an *indicative derivative* of OPRA, not actual
+    quotes, and its trades are 15 minutes delayed.
+  - `opra` is real time. It needs **Algo Trader Plus and a signed OPRA agreement**;
+    without them Alpaca answers 403, which is shown as-is.
+  - `GET /api/options/capabilities` lists the feeds and restrictions.
+- **Provider values.** IV and Greeks are model values computed by Alpaca. Open interest
+  updates once a day.
+- **Caching:** chain snapshots for 20 s, the contract list for 15 min. Every request goes
+  through the shared Alpaca rate limiter.
+- **Demo mode** shows **OPTIONS DATA UNAVAILABLE**. Option prices and Greeks are never
+  simulated.
+
+**Selection.**
+- A LONG setup is analysed with calls and a SHORT setup with puts. Only *long* options
+  are evaluated, so the maximum loss is the premium.
+- Every listed expiration is shown with its days to expiration and whether it is a
+  monthly. Candidates come from the mode's window (day 0–14 days, swing 14–120), or from
+  the expiration you pick.
+- Strikes are taken around the price, widened to cover the stop and targets.
+
+**Checks per contract.** A *block* excludes the contract; a *warn* is shown with it.
+Thresholds are per mode and set in `OPTIONS_CONFIG_PATH` / `backend/options.json` (see
+`options.example.json`).
+
+| Check | Rule (day / swing) |
+| --- | --- |
+| No usable quote / crossed / no bid | block: bid or ask missing, bid > ask, or bid = 0 |
+| Wide spread | block: (ask − bid) / mid > 10 % / 12 % (spreads ≤ $0.05 exempt); "very wide" above 25 % |
+| Stale quote | block: quote older than 120 s / 900 s, or no timestamp |
+| Insufficient volume | block: < 100 / 25 contracts in the current session (a previous session's volume does not count once the market is open) |
+| Insufficient open interest | block: < 500 / 250 or not reported; warn when its date is > 5 days old |
+| IV or Greeks missing | block: any of IV, delta, gamma, theta or vega absent; nothing is estimated in their place |
+| Greeks inconsistent | block: call delta ∉ [0, 1], put delta ∉ [−1, 0], gamma or vega < 0, IV ∉ (0, 500 %] |
+| Outside window / delta band | block: days to expiration outside the window, \|delta\| outside 0.35–0.70 / 0.40–0.80 |
+| Short-dated, 0DTE, heavy decay, breakeven beyond T1 | warn |
+
+**Metrics.** All prices come from the contract's actual quotes, never from the stock price.
+- mid, spread in $ and %, spread cost per contract;
+- premium at the ask (the maximum loss);
+- breakeven at expiration (strike ± ask);
+- intrinsic and extrinsic value;
+- $ per 1 USD stock move (delta × 100), theta in $/day and % of mid, vega per IV point.
+
+**Scenario estimates.** The stock plan's distances (entry → stop, entry → T1) are applied
+to the current option price:
+- as an immediate move with IV and time unchanged;
+- delta follows gamma but is capped at ±1, and the value never falls below intrinsic;
+- moves over 5 % of the price are labelled *low reliability*, and no "option R:R" is
+  derived from them.
+
+**Ranking (0–100, not a probability):** spread 20, activity 15, delta fit 25, time decay
+20, estimated payoff 20. The top contract that passes every check is shown as a
+**candidate for review** only when all of these hold:
+- the feed has actual OPRA quotes;
+- the market is open;
+- the underlying data is fresh;
+- the stock setup is TRIGGERED or WATCHING with a stop and target.
+
+Otherwise the tab shows **No contract recommended** with the reasons, and the comparison
+remains available for exploration.
+
+**Risk is shown separately:**
+- **Stock-level:** entry, stop, targets, risk per share and per 100 shares, R:R.
+- **Option-level:** premium = maximum loss, spread cost, breakeven, the scenario
+  estimates, theta.
+
+The risk notes explain:
+- why the stock stop is not an option loss limit (premium at risk, decay, IV crush,
+  spread, gaps);
+- time-decay risk;
+- short-dated and 0DTE risks: gamma, theta share of premium, auto-exercise, vanishing
+  liquidity.
+
 ## API
 
 | Method | Path | Description |
@@ -923,4 +1014,6 @@ and the immutable signal log (`/api/strategies/signals`) are still recorded.
 | GET | `/api/alerts[?limit=&unacknowledged=&ticker=&type=a,b&after_id=]` | alerts from the alert engine (newest first) + unread counts |
 | POST | `/api/alerts/{id}/ack` · `/api/alerts/ack-all` | mark read |
 | GET / PUT | `/api/alerts/preferences` (POST `/reset`) | alert types, preferences, webhook status |
+| GET | `/api/options/{symbol}?mode=day\|swing[&setup_id=&expiration=YYYY-MM-DD]` | option contracts evaluated for a stock setup (analysis only) |
+| GET | `/api/options/capabilities` · `/api/options/config` | options feeds, fields, restrictions · filter thresholds and weights |
 | GET / POST / DELETE | `/api/alerts/levels` (`{"ticker","price","condition?","note?"}`) · `/api/alerts/levels/{id}` | one-shot price-level alerts |

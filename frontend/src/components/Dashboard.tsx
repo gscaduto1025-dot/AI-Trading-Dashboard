@@ -34,6 +34,7 @@ import PriceChart, { type ChartToggles } from "./PriceChart";
 import RecentSetups from "./RecentSetups";
 import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
+import OptionsView from "./OptionsView";
 import ScannerView from "./ScannerView";
 import StrategySetupsPanel from "./StrategySetupsPanel";
 import SwingDetail from "./SwingDetail";
@@ -120,7 +121,7 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [unread, setUnread] = useState(0);
-  const [view, setView] = useState<"dashboard" | "scanner">("dashboard");
+  const [view, setView] = useState<"dashboard" | "scanner" | "options">("dashboard");
   const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
@@ -507,7 +508,7 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" role="tablist" aria-label="View">
-            {(["dashboard", "scanner"] as const).map((v) => (
+            {(["dashboard", "scanner", "options"] as const).map((v) => (
               <button
                 key={v}
                 role="tab"
@@ -517,7 +518,7 @@ export default function Dashboard() {
                   view === v ? "bg-ink text-bg" : "text-muted hover:text-ink"
                 }`}
               >
-                {v === "dashboard" ? "Chart & analysis" : "Opportunity scanner"}
+                {v === "dashboard" ? "Chart & analysis" : v === "scanner" ? "Opportunity scanner" : "Options"}
               </button>
             ))}
           </div>
@@ -552,7 +553,20 @@ export default function Dashboard() {
       )}
 
       {/* Main grid */}
-      {view === "scanner" ? (
+      {view === "options" ? (
+        <OptionsView
+          symbol={symbol}
+          mode={mode}
+          setupId={selectedSetupId}
+          symbols={health?.watchlist ?? DEFAULT_SYMBOLS}
+          onSymbol={(sym) => {
+            setSelectedSetupId(null);
+            setSymbol(sym);
+          }}
+          onSetup={setSelectedSetupId}
+          onOpenChart={() => setView("dashboard")}
+        />
+      ) : view === "scanner" ? (
         <ScannerView
           onOpenRow={openScannerRow}
           onOpenTicker={openScannerTicker}

@@ -16,6 +16,8 @@ import type {
   RecordedSetup,
   SessionKind,
   StrategyEvaluation,
+  OptionsAnalysis,
+  OptionsCapabilities,
   PlansResponse,
   PriceLevel,
   ScannerFilters,
@@ -132,5 +134,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  options: (symbol: string, mode: Mode, setupId: string | null, expiration: string | null) =>
+    request<OptionsAnalysis>(
+      `/api/options/${symbol}?${q({ mode, setup_id: setupId ?? undefined, expiration: expiration ?? undefined })}`,
+    ),
+  optionsCapabilities: () => request<OptionsCapabilities>("/api/options/capabilities"),
   deletePriceLevel: (id: number) => request<{ ok: boolean }>(`/api/alerts/levels/${id}`, { method: "DELETE" }),
 };

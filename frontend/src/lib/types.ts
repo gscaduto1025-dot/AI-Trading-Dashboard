@@ -777,3 +777,183 @@ export interface ScannerFilters {
   strategy?: string;
   include_no_trade?: boolean;
 }
+
+// ------------------------------------------------------------------ options analysis
+
+export interface OptionsFeed {
+  id: "indicative" | "opra";
+  label: string;
+  real_time: boolean;
+  actual_quotes: boolean;
+  trade_delay_seconds: number;
+  requirement: string;
+  coverage: string;
+}
+
+export interface OptionCheck {
+  id: string;
+  label: string;
+  severity: "block" | "warn" | "info";
+  detail: string;
+}
+
+export interface OptionEstimate {
+  scenario: string;
+  reliability: "low" | "moderate";
+  underlying: number;
+  move: number;
+  value: number;
+  change_per_contract: number;
+  pnl_from_ask_per_contract: number | null;
+}
+
+/** One contract as evaluated by the backend. Every price/Greek is Alpaca's value or null. */
+export interface OptionContractRow {
+  symbol: string;
+  type: "call" | "put";
+  strike: number;
+  expiration: string;
+  dte: number;
+  monthly: boolean;
+  style: string | null;
+  multiplier: number;
+  bid: number | null;
+  ask: number | null;
+  bid_size: number | null;
+  ask_size: number | null;
+  mid: number | null;
+  spread: number | null;
+  spread_pct: number | null;
+  quote_time: number | null;
+  quote_age_seconds: number | null;
+  last: number | null;
+  last_time: number | null;
+  volume: number | null;
+  volume_session: string | null;
+  open_interest: number | null;
+  open_interest_date: string | null;
+  iv: number | null;
+  delta: number | null;
+  gamma: number | null;
+  theta: number | null;
+  vega: number | null;
+  rho: number | null;
+  moneyness: "ITM" | "ATM" | "OTM" | null;
+  intrinsic: number | null;
+  extrinsic: number | null;
+  breakeven: number | null;
+  premium_per_contract: number | null;
+  spread_cost_per_contract: number | null;
+  sensitivity: {
+    per_1_usd_move: number | null;
+    delta_change_per_1_usd: number | null;
+    theta_per_day_per_contract: number | null;
+    theta_pct_of_mid_per_day: number | null;
+    vega_per_vol_point_per_contract: number | null;
+    at_stock_target1: OptionEstimate | null;
+    at_stock_stop: OptionEstimate | null;
+    estimated_option_rr: number | null;
+  };
+  checks: OptionCheck[];
+  eligible: boolean;
+  score: { total: number; points: Record<string, number>; weights: Record<string, number>; note: string } | null;
+  has_data: boolean;
+}
+
+export interface OptionExpiration {
+  date: string;
+  dte: number;
+  weekday: string;
+  monthly: boolean;
+  in_window: boolean;
+  short_dated: boolean;
+  calls: number;
+  puts: number;
+}
+
+export interface OptionsCapabilities {
+  provider: string;
+  configured: boolean;
+  feed: OptionsFeed | null;
+  feeds: Record<string, OptionsFeed>;
+  fields: Record<string, string[]>;
+  restrictions: string[];
+  order_execution: false;
+}
+
+export interface OptionsAnalysis {
+  available: boolean;
+  symbol: string;
+  mode: Mode;
+  reason?: string;
+  code?: string;
+  capabilities?: OptionsCapabilities;
+  order_execution: false;
+  feed?: OptionsFeed;
+  as_of?: string;
+  setup?: {
+    id: string;
+    strategy: string;
+    strategy_name: string;
+    direction: "LONG" | "SHORT";
+    status: StrategyStatus;
+    timeframe: string;
+    qualifies: boolean;
+  } | null;
+  option_type?: "call" | "put";
+  type_rationale?: string;
+  underlying?: { price: number | null; price_time: string | null; stale: boolean; reason: string | null; latency?: string | null };
+  market_open?: boolean;
+  stock_risk?: {
+    status: StrategyStatus;
+    direction: "LONG" | "SHORT";
+    entry_trigger: number | null;
+    entry: number | null;
+    stop: number | null;
+    target1: number | null;
+    target2: number | null;
+    risk_per_share: number | null;
+    reward_per_share_t1: number | null;
+    risk_reward_t1: number | null;
+    risk_per_100_shares: number | null;
+    invalidation: string[];
+    note: string;
+  };
+  expirations?: OptionExpiration[];
+  selected_expiration?: string | null;
+  dte_window?: [number, number];
+  contracts?: OptionContractRow[];
+  contracts_total?: number;
+  candidates?: OptionContractRow[];
+  eligible_count?: number;
+  blocked_by?: Record<string, number>;
+  check_labels?: Record<string, string>;
+  recommendation?: { contract: OptionContractRow | null; reasons: string[]; label: string };
+  option_risk?: {
+    contract: string;
+    premium_per_contract: number | null;
+    max_loss_per_contract: number | null;
+    max_loss_note: string;
+    spread_cost_per_contract: number | null;
+    breakeven_at_expiration: number | null;
+    estimated_at_stock_stop: OptionEstimate | null;
+    estimated_at_stock_target1: OptionEstimate | null;
+    estimated_option_rr: number | null;
+    theta_per_day_per_contract: number | null;
+    vega_per_vol_point_per_contract: number | null;
+    dte: number;
+  } | null;
+  risk_notes?: Record<"stop_vs_option" | "time_decay" | "short_dated" | "iv" | "estimates", string[]>;
+  data_limitations?: string[];
+  thresholds?: {
+    max_spread_pct: number;
+    min_volume: number;
+    min_open_interest: number;
+    max_quote_age_seconds: number;
+    delta_band: [number, number];
+    target_delta: number;
+    dte_window: [number, number];
+    weights: Record<string, number>;
+  };
+  chain_fetched_at?: number | null;
+}

@@ -11,7 +11,7 @@ import re
 import threading
 import time
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
@@ -41,6 +41,9 @@ from .strategies.config import StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
 from .planning.config import PlanningConfig, load_planning_config
 from .alerts import ALERT_TYPES, AlertEngine, PrefsError, WebhookNotifier
+from .options import AlpacaOptionsSource, capabilities, load_options_config
+from .options.analysis import analyze as analyze_options
+from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
@@ -72,7 +75,8 @@ class Service:
     """Holds the market data service, database and AI analyst shared by the routes."""
 
     def __init__(self, settings: Settings, market: MarketDataService | None = None,
-                 db: Database | None = None, analyst: ClaudeAnalyst | None = None) -> None:
+                 db: Database | None = None, analyst: ClaudeAnalyst | None = None,
+                 options: AlpacaOptionsSource | None = None) -> None:
         self.settings = settings
         self.market = market or build_market(settings)
         self.db = db or Database(settings.database_path)
@@ -92,6 +96,11 @@ class Service:
         notifier = (WebhookNotifier(settings.alert_webhook_url)
                     if settings.alert_webhook_url else None)
         self.alerts = AlertEngine(self.db, notifier=notifier)
+        # Options data only from Alpaca; demo mode never simulates option prices or Greeks.
+        self.options_config = load_options_config()
+        client = getattr(self.market.source, "client", None)
+        self.options = options or (AlpacaOptionsSource(client, settings.alpaca_options_feed)
+                                   if client is not None and not self.is_demo else None)
         self.scanner = OpportunityScanner(self)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
@@ -539,6 +548,71 @@ class Service:
         return self.db.add_price_level(sym, round(price, 4), condition, note.strip()[:120])
 
 
+    # ------------------------------------------------------------------- options
+
+    def options_capabilities(self) -> dict:
+        return capabilities(self.options.feed if self.options else None,
+                            self.options is not None)
+
+    def options_analysis(self, symbol: str, mode: str, setup_id: str | None = None,
+                         expiration: str | None = None) -> dict:
+        """Evaluate option contracts for one stock setup (analysis only, no orders)."""
+        if mode not in ("day", "swing"):
+            raise InvalidRequest("mode must be day or swing")
+        symbol = self.market.check_symbol(symbol)
+        if expiration:
+            try:
+                expiration = date.fromisoformat(expiration).isoformat()
+            except ValueError:
+                raise InvalidRequest("expiration must be YYYY-MM-DD") from None
+        if self.options is None:
+            return {"available": False, "symbol": symbol, "mode": mode,
+                    "code": "OPTIONS_DATA_UNAVAILABLE",
+                    "reason": "OPTIONS DATA UNAVAILABLE: options chains come from Alpaca and "
+                              "need ALPACA_API_KEY_ID / ALPACA_API_SECRET_KEY in backend/.env. "
+                              "Demo mode never simulates option prices or Greeks.",
+                    "capabilities": self.options_capabilities(), "order_execution": False}
+        setup, plan = self.setup_with_plan(symbol, mode, setup_id)
+        underlying = {"price": None, "price_time": None, "stale": True,
+                      "reason": "no quote", "latency": None}
+        try:
+            q = next((x for x in self.market.get_quotes() if x["symbol"] == symbol), None)
+        except DataError as exc:
+            q, underlying["reason"] = None, str(exc)
+        if q:
+            underlying = {"price": q["price"] if q.get("available") else None,
+                          "price_time": q.get("price_time"), "stale": bool(q.get("stale")),
+                          "reason": q.get("reason"), "latency": q.get("latency")}
+        now = self.market.now()
+        today = now.astimezone(NY).date()
+        cfg = self.options_config
+        contracts: dict = {"contracts": []}
+        chain: dict = {"snapshots": {}}
+        if setup and plan and underlying["price"] is not None:
+            kind = "call" if setup["direction"] == "LONG" else "put"
+            k_lo, k_hi = strike_bounds(underlying["price"], plan, mode, cfg)
+            lo, hi = cfg.dte_window[mode]
+            if expiration:
+                e_lo = e_hi = date.fromisoformat(expiration)
+            else:
+                e_lo, e_hi = today + timedelta(days=lo), today + timedelta(days=hi)
+            try:
+                contracts = self.options.contracts(
+                    symbol, today, today + timedelta(days=cfg.listing_horizon_days), kind,
+                    k_lo, k_hi)
+                chain = self.options.chain(symbol, e_lo, e_hi, kind, k_lo, k_hi)
+            except DataError as exc:
+                return {"available": False, "symbol": symbol, "mode": mode, "code": exc.code,
+                        "reason": f"OPTIONS DATA UNAVAILABLE: {exc}",
+                        "capabilities": self.options_capabilities(), "order_execution": False}
+        result = analyze_options(symbol=symbol, mode=mode, setup=setup, plan=plan,
+                         underlying=underlying, contracts=contracts, chain=chain,
+                         feed=self.options.feed,
+                         market_open=bool(self.market.market_status().get("is_open")),
+                         now=now, cfg=cfg, expiration=expiration)
+        return {**result, "chain_fetched_at": chain.get("fetched_at")}
+
+
 class WatchlistChange(BaseModel):
     symbol: str
 
@@ -860,6 +934,25 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     @app.get("/api/setups/recent")
     def recent_setups(limit: int = Query(25, ge=1, le=200), mode: str | None = None) -> dict:
         return {"setups": svc().db.recent_setups(limit, mode)}
+
+    @app.get("/api/options/capabilities")
+    def options_capabilities() -> dict:
+        """Which options fields this installation can retrieve, and feed restrictions."""
+        return svc().options_capabilities()
+
+    @app.get("/api/options/config")
+    def options_config() -> dict:
+        return svc().options_config.to_dict()
+
+    @app.get("/api/options/{symbol}")
+    def options_analysis(symbol: str, mode: str = "day", setup_id: str | None = None,
+                         expiration: str | None = None) -> dict:
+        """Option contracts evaluated for a stock setup. Analysis only: TradeScope never
+        places option (or any) orders."""
+        try:
+            return svc().options_analysis(symbol, mode, setup_id, expiration)
+        except InvalidRequest as exc:
+            raise HTTPException(400, str(exc)) from None
 
     @app.get("/api/alerts")
     def alerts(limit: int = Query(50, ge=1, le=500), unacknowledged: bool = False,
