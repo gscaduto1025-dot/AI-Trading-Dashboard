@@ -161,7 +161,7 @@ class Database:
     # ------------------------------------------------------------- strategy signals
 
     def record_signal(self, signal_id: str, setup: dict, trigger: dict, is_demo: bool,
-                      strategy_name: str) -> dict | None:
+                      strategy_name: str, mode: str = "day") -> dict | None:
         """Append a TRIGGERED signal once (immutable log). Returns the new alert, if any."""
         now = int(time.time())
         with self._lock, self._conn:
@@ -183,7 +183,7 @@ class Database:
             cur = self._conn.execute(
                 """INSERT INTO alerts (symbol, mode, timeframe, status, direction, title, message,
                    is_demo, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
-                (setup["ticker"], "day", setup["timeframe"], "TRIGGERED",
+                (setup["ticker"], mode, setup["timeframe"], "TRIGGERED",
                  "long" if setup["direction"] == "LONG" else "short",
                  f"{strategy_name} {setup['direction']}", msg, int(is_demo), now))
             return self._alert_by_id(cur.lastrowid)

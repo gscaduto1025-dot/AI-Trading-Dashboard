@@ -115,6 +115,10 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
 - **Strategy engine** (`tests/test_strategies.py`): positive, negative and edge cases for each
   strategy, the gates, candle-by-candle no-repainting checks, future-candle checks,
   determinism, independence and the API.
+- **Swing engine** (`tests/test_swing.py`): positives pinned to real AAPL/GOOG daily and
+  weekly events, negatives and edges on mutated real candles and hand-built paths,
+  walk-forward no-repaint, future-candle and determinism checks, sorting, separate config
+  and the API (see the swing section below).
 - **Key-level engine** (`tests/test_key_levels.py`): real AAPL/GOOG fixtures against
   independent reference implementations, no-look-ahead checks, splits, and hand-computed
   intraday fixtures (see the key-level section below).
@@ -136,6 +140,9 @@ backend/app/
                            freshness/latency labels, caching, quotes, history
   data/demo.py             deterministic simulated data (DEMO DATA), same pipeline
   analysis/                indicators, levels, setup engine
+  levels/                  key-level detection engine
+  strategies/              day-trading strategy engine (5m/15m)
+  swing/                   swing-trading strategy engine (daily/weekly, 4H/1H support)
   ai/claude.py             Claude explanation (structured JSON output)
   db.py                    SQLite: detected setups, alerts, AI response cache
   main.py                  FastAPI routes + background scanner
@@ -262,6 +269,152 @@ On the dashboard, the **Day-Trading Setups** panel lists TRIGGERED and WATCHING 
 entry, stop, targets, supporting levels and evidence on the chart, and opens the **Setup
 Detail** panel with every condition.
 
+### Swing-trading strategy engine (`backend/app/swing`)
+
+A separate engine with its own configuration (`app/swing/config.py`, overridable with
+`backend/swing_strategies.json` or `SWING_STRATEGY_CONFIG_PATH`; see
+`swing_strategies.example.json`). The day-trading scanner and its config are unchanged.
+
+- **Universe**: the full watchlist.
+- **Primary timeframes**: daily and weekly candles. Each strategy runs on both, for each
+  direction.
+- **Supporting timeframes**: 4-hour and 1-hour trend (close vs EMA20 vs EMA50), shown as
+  optional "supporting" conditions. They never trigger anything on their own.
+- **Higher-timeframe context**: for daily candles, the weekly structure plus the weekly close
+  vs EMA20/50. For weekly candles, the weekly close vs a rising or falling EMA50.
+
+"ATR" below is the 14-candle ATR of the strategy's own timeframe at the candle before the
+one being judged. Counts like "10/6" mean 10 daily candles or 6 weekly candles.
+
+| Strategy | Trigger (on a completed daily/weekly close) | Stop · invalidation · targets |
+| --- | --- | --- |
+| **Daily breakout** | A support/resistance zone that existed before the candle: at least 2 confirmed swing reactions, the first one at least 10/6 candles old. The previous close was inside or below it; this candle closes beyond its far edge by 0.1 ATR. Relative volume ≥ 1.4 (vs 20 candles) when volume exists. The higher-timeframe structure must not oppose. | Stop: the zone's opposite edge ± 0.25 ATR. Invalidation: a close back through the zone. Targets: zones / 1-year extreme, else measured R. |
+| **Trend continuation** | Established trend: EMA20 > EMA50 > EMA200 with the close beyond EMA200, plus confirmed higher highs AND higher lows (mirrored for shorts). Needs 220 daily candles; on weekly candles with fewer than 200 weeks, falls back to EMA20 vs EMA50. A pullback within 5/3 candles: the low comes within 0.3 ATR of EMA20, EMA50 or a support zone, retraces at least 1 ATR from the prior 20-candle extreme, and doesn't close more than 0.5 ATR through the level. Then a bullish candle closes above the prior candle's high. | Stop: pullback extreme ± 0.25 ATR. Invalidation: a close beyond the pullback extreme. The prior swing extreme is a target candidate. |
+| **Consolidation breakout** | The longest range of 10–40 / 6–20 candles ending at the prior candle, with height ≤ 3.5 ATR and at least 2 touches of each edge (within 0.3 ATR). A close beyond an edge by 0.1 ATR, from inside the range, with relative volume ≥ 1.3. | Stop: range midpoint (or the opposite edge) ± 0.25 ATR. Invalidation: a close back through the midpoint. Targets include 1× and 2× range-height measured moves. |
+| **S/R reversal** | A daily or weekly zone known at the time. Price approaches from outside and trades into the zone without closing more than 0.5 ATR through it, on an objective reversal candle: hammer / shooting star (wick ≥ 1.5× body and ≥ 45% of the range, close in the outer 40%) or an engulfing candle. Then, within 2/1 candles, a close beyond the reversal candle's high (long) or low (short). | Stop: the rejection wick ± 0.25 ATR. Invalidation: a close beyond that wick. |
+| **Trend reversal** | A sequence, never one candle: (1) the confirmed structure was a downtrend (lower highs AND lower lows), (2) a close above the last lower high (break of structure, within 80/40 candles), (3) a confirmed higher low above the final lower low, not undercut since, (4) a close above the post-break high (higher high), and (5) the close is above EMA20 with EMA20 higher than 5 candles earlier. EMA20 > EMA50 is a supporting condition. Mirrored for tops. | Stop: higher low ± 0.25 ATR. Invalidation: a close beyond the higher low. |
+
+**Shared acceptance rules.** Every trigger must also pass these:
+- the trigger candle range is ≤ 4 ATR;
+- the close is ≤ 1.5 ATR past the entry trigger (no chasing);
+- the stop is on the correct side and ≤ 3 ATR away;
+- reward/risk to T1 is ≥ 2.0.
+
+**Targets.** Candidates are support/resistance zones (daily, plus weekly for daily setups) and
+the 1-year extreme, all known at the time, plus any strategy-specific candidates (for
+example measured moves). T1 is the first candidate at least 1R away. T2 is the next one at
+least 1R beyond T1. When nothing qualifies, the fallbacks are 2R and 3.5R. Minor single
+swing points are not used as targets, because every small swing would cap T1 at about 1R.
+
+**Status.**
+- **TRIGGERED**: the latest accepted trigger is at most 3 daily (or 1 weekly) candles old,
+  has not been invalidated, and has not hit its stop or T2.
+- **WATCHING**: a developing pattern with a hypothetical plan. Examples: approaching an
+  established zone, inside a qualifying range, a reversal candle awaiting confirmation, or a
+  break of structure plus higher low awaiting the higher high. A developing plan that would
+  be rejected at the trigger (R:R < 2 or stop > 3 ATR) stays NO_TRADE, with the reason.
+- **NO_TRADE**: none of the above, or a gate applies: data unavailable/stale/invalid, fewer
+  than 60 daily candles, or 20-day average dollar volume < $20M.
+
+**Each swing setup returns**:
+- ticker, direction, strategy, market structure (swing structure, EMA20/50/200 stack,
+  higher-timeframe and 4H/1H context);
+- relevant daily and weekly key levels (the nearest three on each side, from the key-level
+  engine);
+- entry trigger, potential entry zone (trigger to trigger + 0.5 ATR), stop, T1, T2,
+  reward/risk and the basis for each target;
+- confirmation conditions (each pass/fail/n-a with detail) and invalidation conditions;
+- status, evidence and recent triggers (accepted or rejected, with the reason);
+- distance from the price to the entry trigger (% and ATR; negative means already beyond);
+- a **setup quality** score.
+
+**Setup quality** is a transparent 0–100 ranking aid. It is not a probability:
+
+```
+quality = 40 x share of required conditions passed
+        + 20 x share of supporting conditions passed (4H/1H, higher timeframe, ...)
+        + 15 x min(R:R / 3, 1)
+        + 15 x higher-timeframe alignment (aligned 1, neutral 0.5, opposed 0)
+        + 10 x min(reactions of the setup's zone, 5) / 5
+```
+
+**No look-ahead, no repainting.**
+- Only candles closed by `as_of` exist; a daily candle closes at the session close (13:00 on
+  early-close days), and a weekly candle closes at its last session's close.
+- ATR/EMA/relative volume at candle *i* use candles 0..*i*.
+- Swing points count only once confirmed (k candles later) before candle *i*.
+- Zones "as of candle *i*" are rebuilt from candles before *i* with the key-level engine's
+  own rules. A past trigger is therefore judged with exactly the levels that existed then.
+- Tests walk forward through real AAPL history and assert triggers never change, check that
+  future candles (even absurd ones) change nothing, and check that results are
+  deterministic. Removing the completed-candle cutoff or the swing-confirmation delay makes
+  those tests fail.
+
+**Tests** (`tests/test_swing.py`, 26 tests). Positive cases are pinned to real events and
+re-checked from the raw CSV rows:
+
+| Strategy | Real event |
+| --- | --- |
+| Daily breakout | AAPL's post-earnings breakout, 2017-02-01 |
+| Consolidation breakdown | AAPL on Brexit day, 2016-06-24 |
+| S/R reversal | AAPL, 2016-10-24, including a check that it was only pending on the reversal candle's own close |
+| Trend continuation | AAPL downtrend, 2016-02-11 |
+| Weekly breakdown | GOOG, week of 2008-10-06 |
+| Trend reversal | GOOG, 2005-08-10, plus a hand-built downtrend → break → higher low → higher high path |
+
+Negative and edge cases:
+- a forming candle;
+- a breakout with ordinary volume;
+- chasing and R:R rejections;
+- trigger expiry;
+- "one break of structure is not a reversal";
+- a missing moving-average shift;
+- the gates;
+- sorting and configuration separation.
+
+**Behaviour on real history** (`cd backend && .venv/bin/python -m scripts.swing_backtest`).
+Every accepted trigger in the AAPL 2015–17 and GOOG 2004–13 fixtures, followed forward:
+
+```
+strategy                     tf     signals accepted T1 first stopped  open  avg R
+Consolidation breakout       1Day        48        2        0       2     0  -1.00
+Consolidation breakout       1Week       13        0        0       0     0   0.00
+Daily breakout               1Day       111       27        7      19     1   0.06
+Daily breakout               1Week       12        5        1       3     1  -0.01
+Support/resistance reversal  1Day       124       15        6       9     0   0.27
+Support/resistance reversal  1Week       14        3        2       1     0   1.02
+Trend continuation           1Day       116       27       10      17     0   0.20
+Trend continuation           1Week       27       14        3       8     3   0.02
+Trend reversal               1Day        24        3        0       3     0  -1.00
+Trend reversal               1Week        2        0        0       0     0   0.00
+```
+
+- These are two stocks and small samples. They ignore costs, slippage and gaps, and they
+  are **not evidence of an edge**.
+- The shared R:R ≥ 2 and stop-width rules reject most raw pattern signals.
+- Consolidation breakouts and trend reversals are rare under these definitions.
+
+**Dashboard.** Switching to **Swing Trading** changes:
+- the chart's default timeframe (1D);
+- the key levels (swing plan: 1H/4H/D/W);
+- the bias/setup analysis;
+- the AI explanation, which now also receives that mode's active strategy setups;
+- the scanner panel: the **Swing Trading Scanner** replaces the day-trading setups.
+
+The scanner sorts by setup quality, ticker, strategy, direction, risk/reward or distance
+from the entry trigger. Clicking a row loads the symbol on its daily or weekly chart and
+draws the following:
+- the entry zone band, trigger, stop, T1 and T2;
+- the setup levels and evidence markers.
+
+It also opens the **Swing Setup Detail** panel. Switching back to Day Trading restores the
+day-trading panel and clears the selection.
+
+API: `GET /api/swing/setups[?symbol=&as_of=&sort=quality|ticker|strategy|direction|risk_reward|distance]`
+and `GET /api/swing/config` (thresholds plus each strategy's rule text). Fresh accepted swing
+triggers are written to the same immutable signal log (`/api/strategies/signals`) and raise
+`swing` alerts.
+
 ### Key-level engine (`backend/app/levels`)
 
 `GET /api/levels/{symbol}?mode=day|swing&timeframe=5Min[&as_of=ISO]` returns every level with
@@ -386,7 +539,8 @@ fixtures for the opening range, VWAP and breakout timing.
 ### Alerts
 
 The scanner runs on startup and every `SCAN_INTERVAL_SECONDS`, or when you press **Scan
-watchlist**. It covers each symbol in both modes on the default timeframe (5m / 1D). An
+watchlist**. It covers each symbol in both modes on the default timeframe (5m / 1D), plus the
+day-trading and swing strategy scanners. An
 alert fires when a symbol's setup starts forming or becomes actionable. Re-scans of unchanged
 data don't duplicate alerts. Turn on **Notify** in the Alerts panel to get browser
 notifications for actionable setups.
@@ -401,6 +555,8 @@ notifications for actionable setups.
 | GET | `/api/bars/{symbol}?timeframe=5Min&session=regular\|extended&limit=300` | candles + completion + data status + quality report |
 | GET | `/api/strategies/setups[?symbol=SPY&as_of=ISO]` | day-trading strategy setups (TRIGGERED / WATCHING / NO_TRADE) |
 | GET | `/api/strategies/config` · `/api/strategies/signals` | strategy thresholds and rules · immutable trigger log |
+| GET | `/api/swing/setups[?symbol=&as_of=&sort=quality]` | swing-trading scanner (daily/weekly; sortable) |
+| GET | `/api/swing/config` | swing strategy thresholds and rules |
 | GET | `/api/levels/{symbol}?mode=day&timeframe=5Min[&as_of=2026-03-05T12:00]` | automatic key levels with evidence, strength, validity (point-in-time replay with `as_of`) |
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |

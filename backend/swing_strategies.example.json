@@ -1,0 +1,7 @@
+{
+  "targets": {"min_rr": 2.5},
+  "gates": {"max_trigger_age": {"1Day": 2}},
+  "daily_breakout": {"min_rel_volume": 1.6},
+  "consolidation_breakout": {"stop_mode": "opposite", "max_bars": {"1Day": 30}},
+  "trend_reversal": {"lookback": {"1Day": 60}}
+}

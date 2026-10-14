@@ -18,6 +18,9 @@ import type {
   SessionKind,
   StrategyEvaluation,
   StrategySetup,
+  SwingEvaluation,
+  SwingSetup,
+  SwingSortKey,
 } from "@/lib/types";
 import AIPanel from "./AIPanel";
 import AlertsPanel from "./AlertsPanel";
@@ -29,6 +32,8 @@ import RecentSetups from "./RecentSetups";
 import SetupPanel from "./SetupPanel";
 import StrategyDetail from "./StrategyDetail";
 import StrategySetupsPanel from "./StrategySetupsPanel";
+import SwingDetail from "./SwingDetail";
+import SwingScannerPanel from "./SwingScannerPanel";
 import Watchlist from "./Watchlist";
 import { DataUnavailable, DemoTag, Panel } from "./ui";
 
@@ -92,6 +97,9 @@ export default function Dashboard() {
   const [strategies, setStrategies] = useState<StrategyEvaluation | null>(null);
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
   const [selectedSetupId, setSelectedSetupId] = useState<string | null>(null);
+  const [swing, setSwing] = useState<SwingEvaluation | null>(null);
+  const [swingError, setSwingError] = useState<string | null>(null);
+  const [swingSort, setSwingSort] = useState<SwingSortKey>("quality");
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [notify, setNotify] = useState(false);
@@ -218,6 +226,7 @@ export default function Dashboard() {
   const strategyRefreshMs = isDemo ? 60_000 : phase === "closed" ? 120_000 : 20_000;
   usePolling(
     () => {
+      if (mode !== "day") return;
       api
         .strategySetups()
         .then((r) => {
@@ -227,16 +236,49 @@ export default function Dashboard() {
         .catch((e) => setStrategiesError(errorText(e)));
     },
     strategyRefreshMs,
-    [strategyRefreshMs, health !== null],
+    [strategyRefreshMs, health !== null, mode],
   );
-  // Resolve the selection against the latest evaluation so its status stays current.
+  // Swing scanner: daily/weekly candles change slowly; the backend caches per candle.
+  const swingRefreshMs = isDemo ? 0 : phase === "closed" ? 300_000 : 60_000;
+  usePolling(
+    () => {
+      if (mode !== "swing") return;
+      api
+        .swingSetups(swingSort)
+        .then((r) => {
+          setSwing(r);
+          setSwingError(null);
+        })
+        .catch((e) => setSwingError(errorText(e)));
+    },
+    swingRefreshMs,
+    [swingRefreshMs, health !== null, mode, swingSort],
+  );
+  // Resolve the selection against the latest evaluation of the active mode, so its
+  // status stays current and a day setup never shows in swing mode (or vice versa).
   const selectedSetup: StrategySetup | null =
-    strategies?.setups.find((x) => x.id === selectedSetupId) ?? null;
+    mode === "day" ? (strategies?.setups.find((x) => x.id === selectedSetupId) ?? null) : null;
+  const selectedSwing: SwingSetup | null =
+    mode === "swing" ? (swing?.setups.find((x) => x.id === selectedSetupId) ?? null) : null;
+  const chartFocus =
+    selectedSetup && selectedSetup.ticker === symbol && selectedSetup.timeframe === timeframe
+      ? selectedSetup
+      : selectedSwing && selectedSwing.ticker === symbol && selectedSwing.timeframe === timeframe
+        ? selectedSwing
+        : null;
 
   const selectStrategySetup = (st: StrategySetup) => {
     setSelectedSetupId(st.id);
     setSymbol(st.ticker);
     setMode("day");
+    setTimeframe(st.timeframe);
+    setSession("regular");
+  };
+
+  const selectSwingSetup = (st: SwingSetup) => {
+    setSelectedSetupId(st.id);
+    setSymbol(st.ticker);
+    setMode("swing");
     setTimeframe(st.timeframe);
     setSession("regular");
   };
@@ -269,6 +311,7 @@ export default function Dashboard() {
   usePolling(loadFeeds, 20_000, [loadFeeds]);
 
   const changeMode = (m: Mode) => {
+    if (m !== mode) setSelectedSetupId(null);
     setMode(m);
     setTimeframe((health?.default_timeframes ?? FALLBACK_DEFAULT)[m]);
   };
@@ -524,7 +567,7 @@ export default function Dashboard() {
                 bars={candles?.bars ?? []}
                 analysis={analysis}
                 keyLevels={keyLevels}
-                focus={selectedSetup && selectedSetup.ticker === symbol && selectedSetup.timeframe === timeframe ? selectedSetup : null}
+                focus={chartFocus}
                 toggles={toggles}
                 isDemo={isDemo}
                 lastComplete={candles?.last_bar_complete ?? true}
@@ -555,6 +598,8 @@ export default function Dashboard() {
         <div className="max-h-[720px] lg:h-[620px] lg:max-h-none">
           {selectedSetup ? (
             <StrategyDetail setup={selectedSetup} onClose={() => setSelectedSetupId(null)} />
+          ) : selectedSwing ? (
+            <SwingDetail setup={selectedSwing} onClose={() => setSelectedSetupId(null)} />
           ) : (
             <SetupPanel analysis={analysis} loading={loading} blocked={loading ? null : blocked} />
           )}
@@ -579,12 +624,23 @@ export default function Dashboard() {
           />
         </div>
         <div className="max-h-[520px] md:col-span-2 md:h-[380px] md:max-h-none xl:col-span-6">
-          <StrategySetupsPanel
-            data={strategies}
-            error={strategiesError}
-            selectedId={selectedSetupId}
-            onSelect={selectStrategySetup}
-          />
+          {mode === "day" ? (
+            <StrategySetupsPanel
+              data={strategies}
+              error={strategiesError}
+              selectedId={selectedSetupId}
+              onSelect={selectStrategySetup}
+            />
+          ) : (
+            <SwingScannerPanel
+              data={swing}
+              error={swingError}
+              sort={swingSort}
+              onSort={setSwingSort}
+              selectedId={selectedSetupId}
+              onSelect={selectSwingSetup}
+            />
+          )}
         </div>
         <div className="max-h-[420px] md:h-[380px] md:max-h-none xl:col-span-3">
           <RecentSetups setups={setups} onSelect={selectSetup} />

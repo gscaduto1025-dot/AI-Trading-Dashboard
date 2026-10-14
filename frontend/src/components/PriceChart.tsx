@@ -19,7 +19,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
-import type { Analysis, Bar, KeyLevel, KeyLevelReport, StrategySetup } from "@/lib/types";
+import type { Analysis, Bar, ChartFocus, KeyLevel, KeyLevelReport } from "@/lib/types";
 import { type Band, ZoneBands } from "./chartPrimitives";
 
 export interface ChartToggles {
@@ -127,7 +127,7 @@ export default function PriceChart({
   analysis: Analysis | null;
   keyLevels: KeyLevelReport | null;
   /** A selected strategy setup: its plan, levels and evidence replace the general plan. */
-  focus?: StrategySetup | null;
+  focus?: ChartFocus | null;
   toggles: ChartToggles;
   isDemo: boolean;
   /** False when the newest candle is still forming; it is drawn translucent. */
@@ -296,6 +296,10 @@ export default function PriceChart({
   // Zones and liquidity as shaded bands.
   useEffect(() => {
     const bands = keyLevels ? zoneBands(keyLevels, toggles) : [];
+    if (focus?.entry_zone) {
+      const [lo, hi] = focus.entry_zone;
+      bands.push({ low: lo, high: hi, fill: "rgba(79,156,249,0.16)", border: "rgba(79,156,249,0.95)", label: "Potential entry zone" });
+    }
     for (const l of focus?.supporting_levels ?? []) {
       if (l.high - l.low > 1e-9) {
         bands.push({ low: l.low, high: l.high, fill: "rgba(79,156,249,0.10)", border: "rgba(79,156,249,0.8)", label: `Setup level: ${l.label}` });
@@ -380,6 +384,9 @@ export default function PriceChart({
     if (focus) {
       for (const l of focus.supporting_levels) {
         if (l.high - l.low <= 1e-9) add(l.low, "rgba(79,156,249,0.8)", l.label.slice(0, 18), LineStyle.Dotted, 1);
+      }
+      if (focus.entry_trigger != null && (focus.entry === null || Math.abs(focus.entry_trigger - focus.entry) > 1e-9)) {
+        add(focus.entry_trigger, "#4f9cf9", "Trigger", LineStyle.Dashed, 1);
       }
       if (focus.entry !== null && focus.stop !== null) {
         add(focus.entry, "#4f9cf9", `${focus.direction} entry`, LineStyle.Solid, 2);

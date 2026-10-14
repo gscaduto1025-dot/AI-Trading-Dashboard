@@ -34,6 +34,9 @@ from .market.timeframes import SPECS, lookback_start, spec
 from .strategies.common import TRIGGERED, signal_id
 from .strategies.config import DAY_TRADING_UNIVERSE, StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
+from .swing.config import SwingConfig, load_swing_config
+from .swing.context import fmt_day
+from .swing.engine import SORT_KEYS, SWING_STRATEGIES, evaluate_swing_symbol, sort_setups
 
 log = logging.getLogger("tradescope")
 
@@ -69,6 +72,8 @@ class Service:
         self.last_scan: int | None = None
         self.strategy_config: StrategyConfig = load_strategy_config()
         self._strategy_cache: dict[tuple, list[dict]] = {}
+        self.swing_config: SwingConfig = load_swing_config()
+        self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
     def is_demo(self) -> bool:
@@ -252,12 +257,125 @@ class Service:
                     alerts.append(alert)
         return alerts
 
+    # ------------------------------------------------------- swing-trading strategies
+
+    SWING_FRAMES = {"1Day": 500, "1Week": 260, "4Hour": 200, "1Hour": 300}
+    SWING_REQUIRED = ("1Day", "1Week")
+
+    def swing_setups(self, symbols: list[str] | None = None, as_of: datetime | None = None,
+                     sort: str = "quality", record: bool = True) -> dict:
+        """Evaluate every swing strategy (daily + weekly, 4H/1H supporting) for the watchlist
+        at `as_of` (default: the feed's cutoff). Cached per symbol until a new daily, weekly
+        or 4-hour candle closes; the output is deterministic for the same candles."""
+        if sort not in SORT_KEYS:
+            raise InvalidRequest(f"sort must be one of {', '.join(SORT_KEYS)}")
+        market = self.market
+        symbols = [market.check_symbol(s) for s in (symbols or market.symbols)]
+        when = market.cutoff() if as_of is None else min(as_of, market.cutoff())
+        setups: list[dict] = []
+        per_symbol: dict[str, dict] = {}
+        new_alerts: list[dict] = []
+        for sym in symbols:
+            try:
+                frames, problems = self._swing_frames(sym, when, as_of is not None)
+            except DataError as exc:
+                per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
+                continue
+            key = (sym, when.timestamp() if as_of is not None else None,
+                   *(frames[tf][-1].time if frames.get(tf) else 0 for tf in self.SWING_FRAMES),
+                   tuple(problems))
+            cached = self._swing_cache.get(key)
+            if cached is None:
+                _, cached = evaluate_swing_symbol(sym, frames, when, market.calendar,
+                                                  self.swing_config, problems,
+                                                  is_demo=self.is_demo)
+                self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] != sym}
+                self._swing_cache[key] = cached
+            setups += cached
+            per_symbol[sym] = {"status": "ok",
+                               "gate_reasons": next((s["reasons"] for s in cached
+                                                     if s["status"] == "NO_TRADE" and problems), []),
+                               "triggered": sum(s["status"] == TRIGGERED for s in cached),
+                               "watching": sum(s["status"] == "WATCHING" for s in cached)}
+            if record and as_of is None:
+                new_alerts += self._record_swing_signals(cached)
+        return {"evaluated_at": when.astimezone(NY).isoformat(), "replay": as_of is not None,
+                "mode": "swing", "universe": symbols, "timeframes": list(self.SWING_REQUIRED),
+                "supporting_timeframes": ["4Hour", "1Hour"], "symbols": per_symbol,
+                "sort": sort, "sort_keys": list(SORT_KEYS), "is_demo": self.is_demo,
+                "setups": sort_setups(setups, sort), "new_alerts": new_alerts,
+                "strategies": [{"id": st.id, "name": st.name} for st in SWING_STRATEGIES]}
+
+    def _swing_frames(self, sym: str, when: datetime, replay: bool):
+        market = self.market
+        frames, problems = {}, []
+        for tf, limit in self.SWING_FRAMES.items():
+            if replay:
+                start = lookback_start(spec(tf), market.calendar, when, limit, "regular")
+                try:
+                    frames[tf] = market.get_history(sym, tf, start, when).bars
+                except DataError:
+                    if tf in self.SWING_REQUIRED:
+                        raise
+                    frames[tf] = []
+                continue
+            try:
+                candles = market.get_candles(sym, tf, "regular", limit)
+            except DataError:
+                if tf in self.SWING_REQUIRED:
+                    raise
+                frames[tf] = []  # supporting timeframes are optional context
+                continue
+            block = candles.analysis_block()
+            if block and block[0] != "INSUFFICIENT_DATA":
+                if tf in self.SWING_REQUIRED:
+                    problems.append(f"{SPECS[tf].label} data: {block[1]}")
+                else:
+                    frames[tf] = []
+                    continue
+            frames[tf] = candles.bars
+        return frames, problems
+
+    def _record_swing_signals(self, setups: list[dict]) -> list[dict]:
+        """Log each fresh, accepted swing trigger once (immutable) and alert on new ones."""
+        names = {st.id: st.name for st in SWING_STRATEGIES}
+        alerts = []
+        for s in setups:
+            if s["status"] != TRIGGERED:
+                continue
+            t = next(t for t in s["triggers"] if t["time"] == s["trigger_time"])
+            alert = self.db.record_signal(s["id"], {**s, "session_date": fmt_day(t["time"])}, t,
+                                          self.is_demo, names[s["strategy"]], mode="swing")
+            if alert:
+                alerts.append(alert)
+        return alerts
+
+    def strategy_summary(self, symbol: str, mode: str) -> list[dict]:
+        """Compact active setups for one symbol (context for the AI explanation)."""
+        try:
+            if mode == "swing":
+                rows = self.swing_setups([symbol], record=False)["setups"]
+            elif symbol.upper() in self.day_universe:
+                rows = self.strategy_setups([symbol], record=False)["setups"]
+            else:
+                return []
+        except DataError:
+            return []
+        keys = ("strategy_name", "direction", "timeframe", "status", "entry", "stop",
+                "target1", "target2", "risk_reward", "reasons")
+        return [{k: s.get(k) for k in keys} for s in rows if s["status"] != "NO_TRADE"][:6]
+
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
         results, alerts, errors = [], [], []
         try:
             alerts += self.strategy_setups()["new_alerts"]
         except DataError as exc:
             errors.append({"symbol": "*", "mode": "strategies", "code": exc.code,
+                           "error": str(exc)})
+        try:
+            alerts += self.swing_setups()["new_alerts"]
+        except DataError as exc:
+            errors.append({"symbol": "*", "mode": "swing_strategies", "code": exc.code,
                            "error": str(exc)})
         for mode in modes:
             timeframe = DEFAULT_TIMEFRAME[mode]
@@ -472,8 +590,12 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             return {"available": False, "reason": f"Analysis paused: {exc.message}"}
         except (DataError, ValueError) as exc:
             return {"available": False, "reason": f"MARKET DATA UNAVAILABLE: {exc}"}
+        a["strategy_setups"] = s.strategy_summary(a["symbol"], mode)
         feed = s.market.feed.id
-        cache_key = f"{a['symbol']}|{mode}|{tf}|{a['analyzed_through']}|{s.analyst.model}|{feed}"
+        sig = "|".join(f"{x['strategy_name']}:{x['direction']}:{x['timeframe']}:{x['status']}"
+                       for x in a["strategy_setups"])
+        cache_key = (f"{a['symbol']}|{mode}|{tf}|{a['analyzed_through']}|{s.analyst.model}|{feed}"
+                     f"|{sig}")
         if not refresh and (cached := s.db.get_ai(cache_key)):
             return {"available": True, "cached": True, "as_of": a["as_of"], **cached}
         try:
@@ -507,6 +629,26 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                 "definitions": [{"id": s.id, "name": s.name,
                                  "rules": inspect.getmodule(s).__doc__.strip()}
                                 for s in eng.STRATEGIES]}
+
+    @app.get("/api/swing/setups")
+    def swing_setups(symbol: str | None = None, as_of: str | None = None,
+                     sort: str = "quality") -> dict:
+        """Swing-trading scanner: setups on daily/weekly candles for the whole watchlist.
+        sort: quality | ticker | strategy | direction | risk_reward | distance."""
+        when = _parse_dt(as_of) if as_of else None
+        try:
+            return svc().swing_setups([symbol] if symbol else None, when, sort)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+
+    @app.get("/api/swing/config")
+    def swing_config() -> dict:
+        import inspect
+        return {"config": svc().swing_config.to_dict(), "universe": svc().market.symbols,
+                "timeframes": {"primary": ["1Day", "1Week"], "supporting": ["4Hour", "1Hour"]},
+                "definitions": [{"id": st.id, "name": st.name,
+                                 "rules": inspect.getmodule(st).__doc__.strip()}
+                                for st in SWING_STRATEGIES]}
 
     @app.get("/api/strategies/signals")
     def strategy_signals(limit: int = Query(100, ge=1, le=500), ticker: str | None = None) -> dict:

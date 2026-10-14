@@ -34,6 +34,7 @@ NO_TRADE. Only an ACTIONABLE engine status can receive TAKE_SETUP, and only if y
 - analysis.key_levels lists automatically detected levels with evidence. Their strength
 scores are heuristic rankings of supporting evidence, not probabilities of a reversal; never
 describe them as odds or likelihoods.
+- analysis.strategy_setups lists the rule-based strategy scanner's active setups for this symbol in the selected mode (day trading or swing trading). Reference them by strategy name; never upgrade a WATCHING setup to triggered, and never invent a setup that is not listed.
 - If the input says the data is DEMO DATA, state in the summary that the analysis is based on \
 simulated demo data and is not a real market read.
 - This is educational analysis, not financial advice. Do not tell the user to buy or sell; \

@@ -362,3 +362,91 @@ export interface StrategyEvaluation {
   setups: StrategySetup[];
   strategies: { id: string; name: string }[];
 }
+
+/** What the chart needs to draw a selected setup (day or swing). */
+export interface ChartFocus {
+  direction: "LONG" | "SHORT";
+  entry: number | null;
+  stop: number | null;
+  target1: number | null;
+  target2: number | null;
+  entry_trigger?: number | null;
+  entry_zone?: [number, number] | null;
+  supporting_levels: StrategyLevelRef[];
+  evidence: { time: number; kind: string; price: number }[];
+}
+
+export type SwingSortKey = "quality" | "ticker" | "strategy" | "direction" | "risk_reward" | "distance";
+
+export interface SwingKeyLevelRef extends StrategyLevelRef {
+  position: "above" | "below" | "at price";
+}
+
+/** One swing-trading setup from the swing engine (backend app/swing). */
+export interface SwingSetup {
+  id: string;
+  ticker: string;
+  mode: "swing";
+  strategy: string;
+  strategy_name: string;
+  direction: "LONG" | "SHORT";
+  timeframe: string;
+  status: StrategyStatus;
+  quality: { score: number; components: Record<string, number>; note: string };
+  market_structure: {
+    timeframe?: string;
+    structure?: string;
+    swing_highs?: number[];
+    swing_lows?: number[];
+    ema_stack?: string;
+    ema20?: number | null;
+    ema50?: number | null;
+    ema200?: number | null;
+    higher_timeframe?: string;
+    higher_timeframe_detail?: string;
+    supporting?: Record<string, string>;
+  };
+  daily_levels: SwingKeyLevelRef[];
+  weekly_levels: SwingKeyLevelRef[];
+  entry_trigger: number | null;
+  entry_zone: [number, number] | null;
+  entry: number | null;
+  stop: number | null;
+  target1: number | null;
+  target2: number | null;
+  risk_reward: number | null;
+  risk_per_share: number | null;
+  /** Signed % move still needed to reach the trigger (negative = already beyond it). */
+  distance_to_trigger_pct: number | null;
+  distance_to_trigger_atr: number | null;
+  confirmation: StrategyCondition[];
+  invalidation: string[];
+  evidence: { time: number; kind: string; price: number }[];
+  supporting_levels: StrategyLevelRef[];
+  reasons: string[];
+  targets_basis: string[];
+  trigger_time: number | null;
+  confirmed_at: number | null;
+  outcome: { state: string; time: number | null; bars_after_trigger: number | null } | null;
+  triggers: { time: number; entry_trigger: number; entry: number; stop: number; risk_reward: number; accepted: boolean; blocked: string | null }[];
+  last_close: number | null;
+  last_candle: string | null;
+  htf_bias: string;
+  evaluated_at: string;
+  is_demo: boolean;
+}
+
+export interface SwingEvaluation {
+  evaluated_at: string;
+  replay: boolean;
+  mode: "swing";
+  universe: string[];
+  timeframes: string[];
+  supporting_timeframes: string[];
+  symbols: Record<string, { status: "ok" | "unavailable"; error?: string; gate_reasons?: string[]; triggered?: number; watching?: number }>;
+  sort: SwingSortKey;
+  sort_keys: SwingSortKey[];
+  is_demo: boolean;
+  setups: SwingSetup[];
+  strategies: { id: string; name: string }[];
+}
