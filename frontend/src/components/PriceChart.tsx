@@ -175,6 +175,8 @@ export default function PriceChart({
         },
       },
       localization: {
+        // explicit: navigator.language can be an invalid tag (e.g. en-US@posix)
+        locale: "en-US",
         timeFormatter: (time: number) =>
           new Date(time * 1000).toLocaleString("en-US", {
             timeZone: "America/New_York",

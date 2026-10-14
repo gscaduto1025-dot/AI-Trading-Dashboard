@@ -4,10 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import type { BacktestDefaults, BacktestRunDetail, BacktestRunRow, BacktestStats, BacktestTrade, Mode } from "@/lib/types";
 import { DivergingBar, DrawdownChart, EquityChart, QualityChart, RHistogram } from "./BacktestCharts";
+import BacktestTradeInspector from "./BacktestTradeInspector";
 import { Empty, Panel } from "./ui";
 
 const n = (v: number | null | undefined, d = 2) => (v == null ? "—" : v.toFixed(d));
 const sR = (v: number | null | undefined, d = 2) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}R`);
+const usd = (v: number | null | undefined) =>
+  v == null ? "—" : `${v < 0 ? "−" : ""}$${Math.abs(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 const day = (t: number) => new Date(t * 1000).toLocaleString("en-US", { timeZone: "America/New_York", dateStyle: "short", timeStyle: "short" });
 
 const VERDICT_CLS: Record<string, string> = {
@@ -60,7 +63,10 @@ function StatsTable({ rows, names }: { rows: [string, BacktestStats][]; names?: 
 }
 
 function NewRun({ defaults, onStarted }: { defaults: BacktestDefaults; onStarted: (id: string) => void }) {
-  const [mode, setMode] = useState<Mode>("swing");
+  const [mode, setMode] = useState<Mode | "both">("swing");
+  const [capital, setCapital] = useState("100000");
+  const [riskPct, setRiskPct] = useState("1");
+  const [posPct, setPosPct] = useState("25");
   const [source, setSource] = useState<"market" | "bundled">("bundled");
   const [symbols, setSymbols] = useState("AAPL, GOOG");
   const [start, setStart] = useState("2005-01-03");
@@ -87,9 +93,16 @@ function NewRun({ defaults, onStarted }: { defaults: BacktestDefaults; onStarted
     e.preventDefault();
     setErr(null);
     setBusy(true);
-    const settings: Record<string, unknown> = { exit_policy: exit, entry_delay_bars: Number(delay) || 0 };
-    if (spread) settings.half_spread_bps = { [mode]: Number(spread) };
-    if (slip) settings.slippage_bps = { [mode]: Number(slip) };
+    const settings: Record<string, unknown> = {
+      exit_policy: exit,
+      entry_delay_bars: Number(delay) || 0,
+      starting_capital: Number(capital) || 100000,
+      risk_per_trade_pct: Number(riskPct) || 1,
+      max_position_pct: Number(posPct) || 25,
+    };
+    const modes = mode === "both" ? ["day", "swing"] : [mode];
+    if (spread) settings.half_spread_bps = Object.fromEntries(modes.map((m) => [m, Number(spread)]));
+    if (slip) settings.slippage_bps = Object.fromEntries(modes.map((m) => [m, Number(slip)]));
     if (comm) settings.commission_per_share = Number(comm);
     let uni = null;
     if (universe.trim()) {
@@ -131,9 +144,10 @@ function NewRun({ defaults, onStarted }: { defaults: BacktestDefaults; onStarted
       </label>
       <label className="flex flex-col gap-0.5">
         <span className="text-faint">Mode</span>
-        <select value={mode} onChange={(e) => setMode(e.target.value as Mode)} className={input} disabled={source === "bundled"}>
+        <select value={mode} onChange={(e) => setMode(e.target.value as Mode | "both")} className={input} disabled={source === "bundled"}>
           <option value="swing">Swing (daily/weekly)</option>
           <option value="day">Day (5/15-minute)</option>
+          <option value="both">Day + swing (split by mode)</option>
         </select>
       </label>
       <label className="flex flex-col gap-0.5">
@@ -141,7 +155,7 @@ function NewRun({ defaults, onStarted }: { defaults: BacktestDefaults; onStarted
         <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className={input} />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-faint">To (max {defaults.max_days[mode]} days)</span>
+        <span className="text-faint">To (max {defaults.max_days[mode === "both" ? "day" : mode]} days)</span>
         <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className={input} />
       </label>
       <label className="flex flex-col gap-0.5 md:col-span-2">
@@ -161,16 +175,28 @@ function NewRun({ defaults, onStarted }: { defaults: BacktestDefaults; onStarted
         <input value={delay} onChange={(e) => setDelay(e.target.value)} className={input} inputMode="numeric" />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-faint">Half spread, bps (default {s.half_spread_bps[mode]})</span>
+        <span className="text-faint">Half spread, bps (default {s.half_spread_bps[mode === "both" ? "day" : mode]})</span>
         <input value={spread} onChange={(e) => setSpread(e.target.value)} className={input} inputMode="decimal" />
       </label>
       <label className="flex flex-col gap-0.5">
-        <span className="text-faint">Slippage, bps (default {s.slippage_bps[mode]})</span>
+        <span className="text-faint">Slippage, bps (default {s.slippage_bps[mode === "both" ? "day" : mode]})</span>
         <input value={slip} onChange={(e) => setSlip(e.target.value)} className={input} inputMode="decimal" />
       </label>
       <label className="flex flex-col gap-0.5">
         <span className="text-faint">Commission $/share/side (default {s.commission_per_share})</span>
         <input value={comm} onChange={(e) => setComm(e.target.value)} className={input} inputMode="decimal" />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-faint">Starting capital ($)</span>
+        <input value={capital} onChange={(e) => setCapital(e.target.value)} className={input} inputMode="numeric" />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-faint">Risk per trade (% of equity)</span>
+        <input value={riskPct} onChange={(e) => setRiskPct(e.target.value)} className={input} inputMode="decimal" />
+      </label>
+      <label className="flex flex-col gap-0.5">
+        <span className="text-faint">Max position (% of equity, no margin)</span>
+        <input value={posPct} onChange={(e) => setPosPct(e.target.value)} className={input} inputMode="decimal" />
       </label>
       <label className="flex flex-col gap-0.5 md:row-span-2">
         <span className="text-faint">Point-in-time universe (optional): SYMBOL,from,to per line</span>
@@ -202,7 +228,7 @@ export default function BacktestView() {
   const [error, setError] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState<{ k: keyof BacktestTrade; desc: boolean }>({ k: "entry_time", desc: false });
-  const [group, setGroup] = useState<"by_strategy" | "by_ticker" | "by_timeframe" | "by_direction">("by_strategy");
+  const [group, setGroup] = useState<"by_strategy" | "by_ticker" | "by_timeframe" | "by_direction" | "by_mode" | "by_regime">("by_strategy");
 
   const loadRuns = useCallback(() => {
     api
@@ -259,19 +285,23 @@ export default function BacktestView() {
   }, [rep, sort]);
   const o = rep?.overall;
   const splitTs = rep?.out_of_sample.from ? Date.parse(`${rep.out_of_sample.from}T00:00:00-05:00`) / 1000 : null;
-  const [known, setKnown] = useState<{ id: string | null; strategy: string[]; timeframe: string[]; names: Record<string, string> }>({
-    id: null, strategy: [], timeframe: [], names: {},
+  const [known, setKnown] = useState<{ id: string | null; strategy: string[]; timeframe: string[]; mode: string[]; regime: string[]; names: Record<string, string> }>({
+    id: null, strategy: [], timeframe: [], mode: [], regime: [], names: {},
   });
+  const [inspect, setInspect] = useState<BacktestTrade | null>(null);
   useEffect(() => {
     // Options come from the unfiltered run so a filter never hides its siblings.
     if (!rep || !selected) return;
     const t = setTimeout(() =>
       setKnown((k) => {
-        const base = k.id === selected ? k : { id: selected, strategy: [], timeframe: [], names: {} };
+        const base = k.id === selected ? k : { id: selected, strategy: [], timeframe: [], mode: [], regime: [], names: {} };
+        const u = (a: string[], b: Record<string, unknown>) => Array.from(new Set([...a, ...Object.keys(b)])).sort();
         return {
           id: selected,
-          strategy: Array.from(new Set([...base.strategy, ...Object.keys(rep.by_strategy)])).sort(),
-          timeframe: Array.from(new Set([...base.timeframe, ...Object.keys(rep.by_timeframe)])).sort(),
+          strategy: u(base.strategy, rep.by_strategy),
+          timeframe: u(base.timeframe, rep.by_timeframe),
+          mode: u(base.mode, rep.by_mode),
+          regime: u(base.regime, rep.by_regime),
           names: { ...base.names, ...names },
         };
       }), 0);
@@ -281,6 +311,8 @@ export default function BacktestView() {
     strategy: known.id === selected ? known.strategy : [],
     ticker: run?.symbols ?? [],
     timeframe: known.id === selected ? known.timeframe : [],
+    mode: known.id === selected ? known.mode : [],
+    regime: known.id === selected ? known.regime : [],
   };
   const setF = (k: string, v: string) => {
     setPage(0);
@@ -347,9 +379,9 @@ export default function BacktestView() {
         <>
           {/* Filters: one row, scoping everything below */}
           <section className="flex flex-wrap items-center gap-2 text-xs">
-            {(["strategy", "ticker", "timeframe"] as const).map((k) => (
+            {(["strategy", "ticker", "timeframe", "mode", "regime"] as const).map((k) => (
               <select key={k} aria-label={k} value={filters[k] ?? ""} onChange={(e) => setF(k, e.target.value)} className={sel}>
-                <option value="">All {k === "strategy" ? "strategies" : `${k}s`}</option>
+                <option value="">All {k === "strategy" ? "strategies" : k === "mode" ? "modes (day/swing)" : k === "regime" ? "market regimes" : `${k}s`}</option>
                 {options[k].map((v) => (
                   <option key={v} value={v}>{k === "strategy" ? known.names[v] ?? names[v] ?? v : v}</option>
                 ))}
@@ -370,7 +402,8 @@ export default function BacktestView() {
               <button onClick={() => setFilters({})} className="text-muted hover:text-ink">Clear filters</button>
             )}
             <span className="ml-auto text-[10px] text-faint">
-              {run.data_description} · {run.start} → {run.end} · {run.engine_evaluations} engine evaluations
+              {run.data_description} · {run.start} → {run.end} · {run.engine_evaluations} engine evaluations · regimes from{" "}
+              {run.regime_basis ?? "—"}
             </span>
           </section>
 
@@ -385,21 +418,28 @@ export default function BacktestView() {
           </section>
 
           <section className="grid grid-cols-2 gap-2 md:grid-cols-4 xl:grid-cols-8">
-            <Tile label="Total trades" value={`${o.trades}`} sub={`${o.wins ?? 0} wins · ${o.losses ?? 0} losses`} />
+            <Tile label="Total trades" value={`${o.trades}`} sub={`${o.wins ?? 0} wins · ${o.losses ?? 0} losses · ${o.sample_note ?? ""}`} />
             <Tile label="Win rate" value={o.win_rate == null ? "—" : `${o.win_rate.toFixed(1)}%`} />
-            <Tile label="Expectancy per trade" value={sR(o.expectancy_r)} sub={o.expectancy_ci95_r ? `95% CI ${sR(o.expectancy_ci95_r[0])} … ${sR(o.expectancy_ci95_r[1])}` : "CI needs ≥ 2 trades"} />
+            <Tile label="Average R (expectancy)" value={sR(o.expectancy_r)} sub={o.expectancy_ci95_r ? `95% CI ${sR(o.expectancy_ci95_r[0])} … ${sR(o.expectancy_ci95_r[1])}` : "CI needs ≥ 2 trades"} />
             <Tile label="Profit factor" value={n(o.profit_factor)} />
             <Tile label="Average winner" value={sR(o.avg_win_r)} sub={o.avg_win_pct == null ? undefined : `${o.avg_win_pct.toFixed(2)}% per share`} />
             <Tile label="Average loser" value={sR(o.avg_loss_r)} sub={o.avg_loss_pct == null ? undefined : `${o.avg_loss_pct.toFixed(2)}% per share`} />
             <Tile label="Avg planned R:R" value={o.avg_planned_rr == null ? "—" : `${o.avg_planned_rr.toFixed(2)}:1`} sub={o.realized_win_loss_ratio == null ? undefined : `realized win/loss ${o.realized_win_loss_ratio.toFixed(2)}`} />
-            <Tile label="Max drawdown" value={o.max_drawdown_pct == null ? "—" : `${o.max_drawdown_pct.toFixed(1)}%`} sub={o.max_drawdown_r == null ? undefined : `${o.max_drawdown_r.toFixed(1)}R · ${run.settings.risk_per_trade_pct as number}% risk/trade`} />
+            <Tile label="Max drawdown" value={`${rep.portfolio.max_drawdown_pct.toFixed(1)}%`} sub={`${usd(rep.portfolio.max_drawdown_usd)} · ${o.max_drawdown_r?.toFixed(1) ?? "—"}R`} />
+          </section>
+          <section className="grid grid-cols-2 gap-2 md:grid-cols-4">
+            <Tile label="Total return (position-sized)" value={`${rep.portfolio.total_return_pct >= 0 ? "+" : ""}${rep.portfolio.total_return_pct.toFixed(2)}%`} sub={`${usd(rep.portfolio.total_pnl)} on ${usd(rep.portfolio.starting_capital)}`} />
+            <Tile label="Trades taken by the portfolio" value={`${rep.portfolio.trades_taken} of ${o.trades}`} sub={Object.entries(rep.portfolio.skipped).map(([k, v]) => `${v} ${k}`).join(" · ") || "none skipped for capital"} />
+            <Tile label="Max open positions" value={`${rep.portfolio.max_concurrent}`} sub={rep.portfolio.assumptions} />
+            <Tile label="Total R (sum)" value={sR(o.total_r)} sub={`avg cost ${sR(o.avg_cost_r)} per trade`} />
           </section>
 
           <section className="grid gap-3 xl:grid-cols-2">
-            <Panel title={`Equity (start 100, ${run.settings.risk_per_trade_pct as number}% risk per trade, net of costs)`} bodyClassName="p-2">
-              <EquityChart points={rep.equity.points} splitTime={splitTs} />
+            <Panel title={`Portfolio equity (position-sized, net of all costs)`} bodyClassName="p-2">
+              <EquityChart points={rep.portfolio.curve} splitTime={splitTs} base={rep.portfolio.starting_capital}
+                fmt={(v) => `$${v >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : `${(v / 1e3).toFixed(v % 1000 ? 1 : 0)}K`}`} />
               <p className="mt-2 px-1 text-[10px] text-muted">Drawdown from the running peak</p>
-              <DrawdownChart points={rep.equity.points} />
+              <DrawdownChart points={rep.portfolio.curve} />
             </Panel>
             <div className="grid gap-3">
               <Panel title="Distribution of realized R multiples" bodyClassName="p-2">
@@ -448,7 +488,7 @@ export default function BacktestView() {
               title="Results by"
               right={
                 <span className="flex gap-1">
-                  {(["by_strategy", "by_ticker", "by_timeframe", "by_direction"] as const).map((g) => (
+                  {(["by_strategy", "by_ticker", "by_timeframe", "by_direction", "by_mode", "by_regime"] as const).map((g) => (
                     <button key={g} onClick={() => setGroup(g)} className={`rounded px-1.5 py-0.5 text-[10px] ${group === g ? "bg-white/10 text-ink" : "text-muted hover:text-ink"}`}>
                       {g.replace("by_", "")}
                     </button>
@@ -464,7 +504,11 @@ export default function BacktestView() {
             </Panel>
           </section>
 
-          <Panel title={`Trade-level report (${allTrades.length})`} bodyClassName="overflow-x-auto">
+          {inspect && selected && (
+            <BacktestTradeInspector runId={selected} trade={inspect} onClose={() => setInspect(null)} />
+          )}
+
+          <Panel title={`Trade-level report (${allTrades.length}) · simulated, separate from your trade log · click a row to inspect`} bodyClassName="overflow-x-auto">
             {!allTrades.length ? (
               <Empty>No trades match the filters.</Empty>
             ) : (
@@ -472,7 +516,7 @@ export default function BacktestView() {
                 <table className="w-full text-[11px]">
                   <thead className="text-left text-[10px] uppercase tracking-wider text-faint">
                     <tr>
-                      {([["entry_time", "Entry"], ["ticker", "Ticker"], ["strategy", "Strategy"], ["timeframe", "TF"], ["direction", "Dir"], ["entry", "Fill"], ["stop", "Stop"], ["target1", "T1"], ["exit", "Exit"], ["exit_reason", "Exit reason"], ["bars_held", "Bars"], ["r", "R (net)"], ["gross_r", "R (gross)"], ["return_pct", "Return %"], ["quality", "Quality"], ["planned_rr", "Planned R:R"]] as [keyof BacktestTrade, string][]).map(([k, label]) => (
+                      {([["entry_time", "Entry"], ["ticker", "Ticker"], ["strategy", "Strategy"], ["timeframe", "TF"], ["direction", "Dir"], ["entry", "Fill"], ["stop", "Stop"], ["target1", "T1"], ["exit", "Exit"], ["exit_reason", "Exit reason"], ["bars_held", "Bars"], ["r", "R (net)"], ["gross_r", "R (gross)"], ["return_pct", "Return %"], ["quality", "Quality"], ["planned_rr", "Planned R:R"], ["shares", "Shares"], ["pnl_usd", "P&L $"], ["regime", "Regime"]] as [keyof BacktestTrade, string][]).map(([k, label]) => (
                         <th key={k} className="cursor-pointer px-2 py-1 font-medium hover:text-ink" onClick={() => setSort((s) => ({ k, desc: s.k === k ? !s.desc : true }))}>
                           {label}{sort.k === k ? (sort.desc ? " ↓" : " ↑") : ""}
                         </th>
@@ -481,8 +525,14 @@ export default function BacktestView() {
                   </thead>
                   <tbody className="divide-y divide-line tabular-nums">
                     {allTrades.slice(page * PAGE, page * PAGE + PAGE).map((t) => (
-                      <tr key={t.id} title={`Signal ${day(t.signal_time)} · open ${t.open} · MAE ${t.mae_r}R · MFE ${t.mfe_r}R`}>
-                        <td className="px-2 py-1">{day(t.entry_time)}</td>
+                      <tr key={t.id} onClick={() => setInspect(t)}
+                        className={`cursor-pointer hover:bg-white/[0.03] ${inspect?.id === t.id ? "bg-accent/10" : ""}`}
+                        title={`Click to inspect · signal ${day(t.signal_time)} · MAE ${t.mae_r}R · MFE ${t.mfe_r}R`}>
+                        <td className="px-2 py-1">
+                          {t.mode === "swing"
+                            ? new Date(t.entry_time * 1000).toLocaleDateString("en-US", { timeZone: "America/New_York", dateStyle: "short" })
+                            : day(t.entry_time)}
+                        </td>
                         <td className="px-2 py-1 font-sans font-semibold">{t.ticker}</td>
                         <td className="px-2 py-1 font-sans">{t.strategy_name}</td>
                         <td className="px-2 py-1">{t.timeframe}</td>
@@ -498,6 +548,9 @@ export default function BacktestView() {
                         <td className="px-2 py-1">{n(t.return_pct)}</td>
                         <td className="px-2 py-1">{n(t.quality, 1)}</td>
                         <td className="px-2 py-1">{t.planned_rr == null ? "—" : `${t.planned_rr}:1`}</td>
+                        <td className="px-2 py-1">{t.shares || "—"}</td>
+                        <td className={`px-2 py-1 ${(t.pnl_usd ?? 0) >= 0 ? "" : "text-bear"}`}>{t.pnl_usd == null ? "—" : t.pnl_usd.toFixed(0)}</td>
+                        <td className="px-2 py-1 font-sans text-faint">{t.regime}</td>
                       </tr>
                     ))}
                   </tbody>

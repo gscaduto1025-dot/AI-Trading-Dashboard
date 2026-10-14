@@ -8,6 +8,10 @@ import type {
   BacktestRequest,
   BacktestRunDetail,
   BacktestRunRow,
+  BacktestTradeChart,
+  JournalAccount,
+  JournalResponse,
+  JournalTrade,
   Analysis,
   CandleResponse,
   DataStatus,
@@ -138,6 +142,29 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  journal: (account: JournalAccount) => request<JournalResponse>(`/api/journal/${account}`),
+  journalCreate: (account: JournalAccount, body: Record<string, unknown>) =>
+    request<JournalTrade>(`/api/journal/${account}/trades`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  journalAddFill: (account: JournalAccount, id: number, body: Record<string, unknown>) =>
+    request<JournalTrade>(`/api/journal/${account}/trades/${id}/fills`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  journalDeleteFill: (account: JournalAccount, id: number, fillId: number) =>
+    request<JournalTrade>(`/api/journal/${account}/trades/${id}/fills/${fillId}`, { method: "DELETE" }),
+  journalUpdate: (account: JournalAccount, id: number, body: Record<string, unknown>) =>
+    request<JournalTrade>(`/api/journal/${account}/trades/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  journalDelete: (account: JournalAccount, id: number) =>
+    request<{ ok: boolean }>(`/api/journal/${account}/trades/${id}`, { method: "DELETE" }),
   backtestDefaults: () => request<BacktestDefaults>("/api/backtests/config"),
   backtests: () =>
     request<{ runs: BacktestRunRow[]; running: { id: string; progress: number; message: string } | null }>(
@@ -151,6 +178,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  backtestTradeChart: (id: string, tradeId: string) =>
+    request<BacktestTradeChart>(
+      `/api/backtests/${encodeURIComponent(id)}/trades/${encodeURIComponent(tradeId)}/chart`,
+    ),
   deleteBacktest: (id: string) =>
     request<{ ok: boolean }>(`/api/backtests/${encodeURIComponent(id)}`, { method: "DELETE" }),
   options: (symbol: string, mode: Mode, setupId: string | null, expiration: string | null) =>

@@ -963,6 +963,7 @@ export interface OptionsAnalysis {
 /** Summary statistics for a set of hypothetical trades (backend app/backtest/metrics). */
 export interface BacktestStats {
   trades: number;
+  sample_note?: string;
   wins?: number;
   losses?: number;
   win_rate?: number | null;
@@ -1020,6 +1021,37 @@ export interface BacktestTrade {
   bars_held: number;
   planned_rr: number | null;
   quality: number | null;
+  fees_per_share: number;
+  regime?: string;
+  shares?: number;
+  notional?: number;
+  risk_usd?: number;
+  pnl_usd?: number;
+  equity_after?: number;
+  sized_by?: string;
+}
+
+export interface BacktestPortfolio {
+  starting_capital: number;
+  final_equity: number;
+  total_pnl: number;
+  total_return_pct: number;
+  max_drawdown_pct: number;
+  max_drawdown_usd: number;
+  trades_taken: number;
+  skipped: Record<string, number>;
+  max_concurrent: number;
+  curve: { time: number; equity: number; drawdown_pct: number }[];
+  assumptions: string;
+}
+
+export interface BacktestTradeChart {
+  trade: BacktestTrade;
+  timeframe: string;
+  data_source: string;
+  is_demo: boolean;
+  simulated: true;
+  bars: { time: number; open: number; high: number; low: number; close: number; volume: number }[];
 }
 
 export interface BacktestReport {
@@ -1044,6 +1076,9 @@ export interface BacktestReport {
   by_strategy: Record<string, BacktestStats>;
   by_timeframe: Record<string, BacktestStats>;
   by_direction: Record<string, BacktestStats>;
+  by_mode: Record<string, BacktestStats>;
+  by_regime: Record<string, BacktestStats>;
+  portfolio: BacktestPortfolio;
   quality: {
     trades: number;
     spearman: number | null;
@@ -1058,7 +1093,7 @@ export interface BacktestReport {
 }
 
 export interface BacktestRequest {
-  mode: Mode;
+  mode: Mode | "both";
   data_source: "market" | "bundled";
   symbols?: string[];
   start: string;
@@ -1088,7 +1123,8 @@ export interface BacktestRunRow {
 export interface BacktestRunDetail extends BacktestRunRow {
   live?: { progress: number; message: string };
   run?: {
-    mode: Mode;
+    mode: Mode | "both";
+    regime_basis?: string;
     symbols: string[];
     start: string;
     end: string;
@@ -1118,6 +1154,77 @@ export interface BacktestDefaults {
   };
   limitations: string[];
   max_days: Record<Mode, number>;
-  sources: Record<"market" | "bundled", { label: string; is_demo: boolean; modes: Mode[]; symbols: string[] }>;
+  sources: Record<"market" | "bundled", { label: string; is_demo: boolean; modes: (Mode | "both")[]; symbols: string[] }>;
+  order_execution: false;
+}
+
+// ------------------------------------------------------------------------- trade log
+
+export type JournalAccount = "actual" | "paper";
+
+export interface JournalFill {
+  id: number;
+  trade_id: number;
+  side: "BUY" | "SELL";
+  quantity: number;
+  price: number;
+  fees: number;
+  executed_at: number;
+  note: string;
+}
+
+export interface JournalPnl {
+  status: "open" | "closed" | "empty" | "invalid";
+  open_quantity: number;
+  avg_entry: number | null;
+  avg_exit: number | null;
+  entered_quantity: number;
+  exited_quantity: number;
+  max_position: number;
+  partial_exits: number;
+  realized_gross: number;
+  fees: number;
+  realized_net: number;
+  unrealized: number | null;
+  initial_risk: number | null;
+  r_multiple: number | null;
+  opened_at: number | null;
+  closed_at: number | null;
+}
+
+export interface JournalTrade {
+  id: number;
+  account: JournalAccount;
+  ticker: string;
+  direction: "LONG" | "SHORT";
+  strategy: string | null;
+  setup_id: string | null;
+  planned_stop: number | null;
+  planned_target: number | null;
+  notes: string;
+  fills: JournalFill[];
+  pnl: JournalPnl;
+  problem: string | null;
+  mark_note: string | null;
+}
+
+export interface JournalResponse {
+  account: JournalAccount;
+  trades: JournalTrade[];
+  stats: {
+    closed_trades: number;
+    open_trades: number;
+    win_rate: number | null;
+    net_pnl: number;
+    fees: number;
+    avg_win: number | null;
+    avg_loss: number | null;
+    profit_factor: number | null;
+    expectancy: number | null;
+    avg_r: number | null;
+    r_trades: number;
+    sample_note: string;
+  };
+  simulated: false;
   order_execution: false;
 }

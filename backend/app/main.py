@@ -42,6 +42,8 @@ from .strategies.engine import STRATEGIES, evaluate_symbol
 from .planning.config import PlanningConfig, load_planning_config
 from .alerts import ALERT_TYPES, AlertEngine, PrefsError, WebhookNotifier
 from .backtest.manager import BacktestBusy, BacktestManager
+from .journal.pnl import JournalError
+from .journal.service import TradeLog
 from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
@@ -104,6 +106,7 @@ class Service:
                                    if client is not None and not self.is_demo else None)
         self.scanner = OpportunityScanner(self)
         self.backtests = BacktestManager(self)
+        self.trade_log = TradeLog(self.db, self.market)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
@@ -937,6 +940,63 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     def recent_setups(limit: int = Query(25, ge=1, le=200), mode: str | None = None) -> dict:
         return {"setups": svc().db.recent_setups(limit, mode)}
 
+    # ---------------------------------------------------------------- trade log
+    # The user's own ACTUAL and PAPER trades, recorded manually. Separate from simulated
+    # backtest trades. Nothing here places an order.
+
+    def _journal(call, *args):
+        try:
+            return call(*args)
+        except JournalError as exc:
+            raise HTTPException(400, str(exc)) from None
+        except FileExistsError as exc:
+            raise HTTPException(409, str(exc)) from None
+        except KeyError as exc:
+            raise HTTPException(404, str(exc).strip("'")) from None
+
+    @app.get("/api/journal/{account}")
+    def journal_list(account: str) -> dict:
+        return _journal(svc().trade_log.list, account)
+
+    @app.post("/api/journal/{account}/trades")
+    def journal_create(account: str, body: dict = Body(...)) -> dict:
+        return _journal(svc().trade_log.create, account, body)
+
+    @app.patch("/api/journal/{account}/trades/{trade_id}")
+    def journal_update(account: str, trade_id: int, body: dict = Body(...)) -> dict:
+        return _journal(svc().trade_log.update, account, trade_id, body)
+
+    @app.delete("/api/journal/{account}/trades/{trade_id}")
+    def journal_delete(account: str, trade_id: int) -> dict:
+        if not _journal(svc().trade_log.delete, account, trade_id):
+            raise HTTPException(404, "trade not found")
+        return {"ok": True}
+
+    @app.post("/api/journal/{account}/trades/{trade_id}/fills")
+    def journal_add_fill(account: str, trade_id: int, body: dict = Body(...)) -> dict:
+        return _journal(svc().trade_log.add_fill, account, trade_id, body)
+
+    @app.delete("/api/journal/{account}/trades/{trade_id}/fills/{fill_id}")
+    def journal_delete_fill(account: str, trade_id: int, fill_id: int) -> dict:
+        return _journal(svc().trade_log.delete_fill, account, trade_id, fill_id)
+
+    @app.get("/api/journal/{account}/export.csv")
+    def journal_csv(account: str) -> Response:
+        data = _journal(svc().trade_log.list, account)
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["trade_id", "account", "ticker", "direction", "strategy", "status",
+                    "fill_id", "side", "quantity", "price", "fees", "executed_at",
+                    "trade_realized_net", "trade_r_multiple"])
+        for t in data["trades"]:
+            for f in t["fills"]:
+                w.writerow([t["id"], account, t["ticker"], t["direction"], t["strategy"] or "",
+                            t["pnl"]["status"], f["id"], f["side"], f["quantity"], f["price"],
+                            f["fees"], datetime.fromtimestamp(f["executed_at"], NY).isoformat(),
+                            t["pnl"].get("realized_net"), t["pnl"].get("r_multiple")])
+        return Response(buf.getvalue(), media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="trade-log-{account}.csv"'})
+
     @app.get("/api/backtests/config")
     def backtest_config() -> dict:
         """Default assumptions, data sources and documented limitations."""
@@ -963,12 +1023,13 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     @app.get("/api/backtests/{run_id}")
     def get_backtest(run_id: str, strategy: str | None = None, ticker: str | None = None,
                      timeframe: str | None = None, direction: str | None = None,
-                     start: str | None = None, end: str | None = None) -> dict:
+                     start: str | None = None, end: str | None = None,
+                     mode: str | None = None, regime: str | None = None) -> dict:
         """A run with metrics recomputed for the given filters."""
         try:
             out = svc().backtests.report(run_id, strategy=strategy, ticker=ticker,
                                          timeframe=timeframe, direction=direction,
-                                         start=start, end=end)
+                                         start=start, end=end, mode=mode, regime=regime)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from None
         if out is None:
@@ -993,6 +1054,16 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                         if c.endswith("_time") else t.get(c) for c in cols])
         return Response(buf.getvalue(), media_type="text/csv", headers={
             "Content-Disposition": f'attachment; filename="backtest-{run_id}.csv"'})
+
+    @app.get("/api/backtests/{run_id}/trades/{trade_id}/chart")
+    def backtest_trade_chart(run_id: str, trade_id: str) -> dict:
+        try:
+            out = svc().backtests.trade_chart(run_id, trade_id)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+        if out is None:
+            raise HTTPException(404, "Backtest trade not found")
+        return out
 
     @app.delete("/api/backtests/{run_id}")
     def delete_backtest(run_id: str) -> dict:

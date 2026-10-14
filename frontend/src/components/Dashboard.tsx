@@ -35,6 +35,7 @@ import RecentSetups from "./RecentSetups";
 import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
 import BacktestView from "./BacktestView";
+import TradeLogView from "./TradeLogView";
 import OptionsView from "./OptionsView";
 import ScannerView from "./ScannerView";
 import StrategySetupsPanel from "./StrategySetupsPanel";
@@ -122,7 +123,7 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [unread, setUnread] = useState(0);
-  const [view, setView] = useState<"dashboard" | "scanner" | "options" | "backtest">("dashboard");
+  const [view, setView] = useState<"dashboard" | "scanner" | "options" | "backtest" | "journal">("dashboard");
   const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
@@ -509,7 +510,7 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" role="tablist" aria-label="View">
-            {(["dashboard", "scanner", "options", "backtest"] as const).map((v) => (
+            {(["dashboard", "scanner", "options", "backtest", "journal"] as const).map((v) => (
               <button
                 key={v}
                 role="tab"
@@ -525,7 +526,9 @@ export default function Dashboard() {
                     ? "Opportunity scanner"
                     : v === "options"
                       ? "Options"
-                      : "Backtesting"}
+                      : v === "backtest"
+                        ? "Backtesting"
+                        : "Trade log"}
               </button>
             ))}
           </div>
@@ -560,7 +563,9 @@ export default function Dashboard() {
       )}
 
       {/* Main grid */}
-      {view === "backtest" ? (
+      {view === "journal" ? (
+        <TradeLogView />
+      ) : view === "backtest" ? (
         <BacktestView />
       ) : view === "options" ? (
         <OptionsView

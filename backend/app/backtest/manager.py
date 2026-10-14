@@ -7,10 +7,11 @@ import re
 import threading
 import time
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from .config import BacktestConfig
-from .data import BUNDLED, BundledHistory, MarketHistory
+from ..market.calendar import NY
+from .config import EXEC_TF, BacktestConfig
+from .data import BUNDLED, BundledHistory, MarketHistory, validate_series
 from .runner import LIMITATIONS, MAX_DAYS, report, run_backtest
 
 log = logging.getLogger("tradescope.backtest")
@@ -35,7 +36,7 @@ class BacktestManager:
         return {
             "market": {"label": "Market data (" + ("DEMO - simulated" if svc.is_demo else
                                                    f"Alpaca {svc.market.feed.label}") + ")",
-                       "is_demo": svc.is_demo, "modes": ["day", "swing"],
+                       "is_demo": svc.is_demo, "modes": ["day", "swing", "both"],
                        "symbols": list(svc.market.symbols)},
             "bundled": {"label": "Bundled real daily history (AAPL Feb 2015-Feb 2017, "
                                  "GOOG Aug 2004-Mar 2013)",
@@ -44,21 +45,22 @@ class BacktestManager:
 
     def validate(self, req: dict) -> dict:
         mode = req.get("mode")
-        if mode not in ("day", "swing"):
-            raise ValueError("mode must be day or swing")
+        if mode not in ("day", "swing", "both"):
+            raise ValueError("mode must be day, swing or both")
         src = req.get("data_source", "market")
         if src not in ("market", "bundled"):
             raise ValueError("data_source must be market or bundled")
         if src == "bundled" and mode != "swing":
             raise ValueError("bundled history is daily only: use swing mode")
+        limit = MAX_DAYS["day"] if mode == "both" else MAX_DAYS[mode]
         try:
             start, end = date.fromisoformat(req["start"]), date.fromisoformat(req["end"])
         except (KeyError, TypeError, ValueError):
             raise ValueError("start and end must be YYYY-MM-DD") from None
         if start >= end:
             raise ValueError("start must be before end")
-        if (end - start).days > MAX_DAYS[mode]:
-            raise ValueError(f"{mode} backtests are limited to {MAX_DAYS[mode]} calendar days")
+        if (end - start).days > limit:
+            raise ValueError(f"{mode} backtests are limited to {limit} calendar days")
         if end > date.today():
             raise ValueError("end cannot be in the future")
         universe = req.get("universe") or None
@@ -157,6 +159,36 @@ class BacktestManager:
             out["report"] = report(run, **filters)
             out["skipped"] = run["skipped"][:500]
         return out
+
+    def trade_chart(self, run_id: str, trade_id: str) -> dict | None:
+        """Candles around one simulated trade (re-fetched from the run's data source), for
+        inspecting entry, stop, targets and exit. Simulated - never a real fill."""
+        row = self.db.backtest(run_id)
+        run = row.get("result") if row else None
+        if not run:
+            return None
+        trade = next((t for t in run["trades"] if t["id"] == trade_id), None)
+        if trade is None:
+            return None
+        md = trade.get("mode", run["mode"])
+        tf = EXEC_TF[md]
+        provider = BundledHistory() if run["data_source"] == "bundled" \
+            else MarketHistory(self.service.market)
+        cal = self.service.market.calendar
+        if md == "day":
+            d0 = datetime.fromtimestamp(trade["entry_time"], NY).date()
+            sd = cal.day(d0)
+            lo, hi = sd.open, sd.close
+        else:
+            lo = datetime.fromtimestamp(trade["entry_time"] - 90 * 86400, NY)
+            hi = datetime.fromtimestamp(trade["exit_time"] + 45 * 86400, NY)
+        bars, rep = validate_series(trade["ticker"], tf, provider.bars(trade["ticker"], tf, lo, hi),
+                                    cal)
+        return {"trade": trade, "timeframe": tf, "data_source": run["data_source"],
+                "is_demo": run["is_demo"], "simulated": True,
+                "bars": [{"time": b.time, "open": b.open, "high": b.high, "low": b.low,
+                          "close": b.close, "volume": b.volume} for b in bars],
+                "integrity": rep.to_dict()}
 
     def defaults(self) -> dict:
         return {"settings": BacktestConfig().to_dict(), "limitations": LIMITATIONS,

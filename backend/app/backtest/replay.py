@@ -36,7 +36,8 @@ def _dt(ts: int) -> datetime:
 
 
 def load_series(provider: HistoryProvider, symbol: str, mode: str, start: date, end: date,
-                cal: MarketCalendar) -> tuple[dict[str, Series], list[Integrity]]:
+                cal: MarketCalendar, only: tuple[str, ...] | None = None
+                ) -> tuple[dict[str, Series], list[Integrity]]:
     """Every timeframe the engine needs, from enough history before `start` to fill the
     live lookback windows, up to the close of `end`."""
     frames = DAY_FRAMES if mode == "day" else SWING_FRAMES
@@ -45,6 +46,8 @@ def load_series(provider: HistoryProvider, symbol: str, mode: str, start: date, 
     start_dt = datetime.combine(start, datetime.min.time(), NY)
     series, reports = {}, []
     for tf, limit in frames.items():
+        if only and tf not in only:
+            continue
         lb = lookback_start(spec(tf), cal, start_dt, limit, "regular")
         try:
             raw = provider.bars(symbol, tf, lb, end_dt + timedelta(days=1))

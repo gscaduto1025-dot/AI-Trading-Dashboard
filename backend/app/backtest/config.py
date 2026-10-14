@@ -25,6 +25,16 @@ class BacktestConfig:
     half_spread_bps: dict = _per_mode(2.0, 2.0)   # paid on every market order
     slippage_bps: dict = _per_mode(3.0, 5.0)      # adverse, on market/stop orders
     commission_per_share: float = 0.005           # per side (Alpaca is $0; conservative)
+    # Regulatory fees on the SELL side (long exit / short entry). Rates change; check the
+    # current SEC Section 31 rate and FINRA TAF schedule before relying on exact figures.
+    sec_fee_rate: float = 0.0000278               # x sale notional ($27.80 per $1M)
+    finra_taf_per_share: float = 0.000166         # per share sold (per-trade cap ignored)
+    short_borrow_bps_per_year: float = 100.0      # stock-loan fee on shorts (1 %/yr, GC-ish)
+    # ---- portfolio simulation (position sizing)
+    starting_capital: float = 100_000.0
+    max_position_pct: float = 25.0     # notional cap per position, % of equity
+    max_leverage: float = 1.0          # buying power = equity x this (1.0 = no margin)
+    max_open_positions: int = 10
     tick: float = 0.01                 # a target limit fills only if price trades THROUGH it
     exit_policy: str = "t1"            # t1 | t2 | split (half at T1, rest at T2/stop)
     respect_entry_zone: bool = True    # skip fills outside the plan's entry zone (no chasing)
@@ -68,6 +78,12 @@ class BacktestConfig:
                 raise ValueError("spread and slippage must be non-negative")
         if not 0 < out.risk_per_trade_pct <= 10:
             raise ValueError("risk_per_trade_pct must be in (0, 10]")
+        if out.starting_capital < 1000 or not 0 < out.max_position_pct <= 100:
+            raise ValueError("starting_capital must be >= 1000 and max_position_pct in (0, 100]")
+        if not 0.5 <= out.max_leverage <= 4 or out.max_open_positions < 1:
+            raise ValueError("max_leverage must be 0.5-4 and max_open_positions >= 1")
+        if min(out.sec_fee_rate, out.finra_taf_per_share, out.short_borrow_bps_per_year) < 0:
+            raise ValueError("fees must be non-negative")
         if not 2 <= out.walk_forward_folds <= 12:
             raise ValueError("walk_forward_folds must be 2-12")
         return out

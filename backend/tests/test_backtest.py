@@ -14,6 +14,7 @@ from app.backtest import metrics as M
 from app.backtest.config import DAY_FRAMES, SWING_FRAMES, BacktestConfig
 from app.backtest.data import BundledHistory, MarketHistory, Series, validate_series
 from app.backtest.execution import simulate
+from app.backtest.regime import regime_at
 from app.backtest.replay import load_series, replay_symbol
 from app.backtest.runner import report, run_backtest
 from app.config import Settings
@@ -32,7 +33,9 @@ CAL = MarketCalendar()
 ENGINE = {"strategy": StrategyConfig(), "swing": SwingConfig(), "planning": PlanningConfig()}
 NOCOST = BacktestConfig().with_overrides({"half_spread_bps": {"day": 0, "swing": 0},
                                           "slippage_bps": {"day": 0, "swing": 0},
-                                          "commission_per_share": 0})
+                                          "commission_per_share": 0, "sec_fee_rate": 0,
+                                          "finra_taf_per_share": 0,
+                                          "short_borrow_bps_per_year": 0})
 
 
 def ts(y, m, d, hh=0, mm=0) -> int:
@@ -66,10 +69,25 @@ def test_entry_at_next_open_with_spread_slippage_and_commission():
     assert skip is None and tr["open"] == 100
     assert tr["entry"] == pytest.approx(100 * (1 + 5e-4))
     assert tr["exit"] == 102.0 and tr["exit_reason"] == "target1"  # limit: no slippage
-    pnl = 102.0 - tr["entry"] - 0.01
+    fees = 0.01 + 0.0000278 * 102.0 + 0.000166  # commission both sides + SEC + TAF on the sale
+    pnl = 102.0 - tr["entry"] - fees
     assert tr["pnl_per_share"] == pytest.approx(pnl, abs=1e-4)
+    assert tr["fees_per_share"] == pytest.approx(fees, abs=1e-6)
     assert tr["r"] == pytest.approx(pnl / (tr["entry"] - 99.0), abs=1e-4)
     assert tr["r"] < tr["gross_r"] and tr["cost_per_share"] > 0
+
+
+def test_short_pays_sale_fees_at_entry_and_borrow_while_held():
+    cfg = BacktestConfig().with_overrides({"half_spread_bps": {"day": 0},
+                                           "slippage_bps": {"day": 0},
+                                           "commission_per_share": 0})
+    s = sig("SHORT", stop=101.0, t1=98.0, t2=96.0, zone=(99.5, 100.5))
+    bars = five(rows=[(100, 100.2, 99.7, 99.9), (99.9, 100.0, 97.9, 98.1)])
+    tr, _ = simulate(s, bars, cfg, "day")
+    borrow = 100 * 0.01 * 1 / 360  # 1 %/yr on the entry price, minimum one day
+    fees = 0.0000278 * 100 + 0.000166 + borrow  # the SALE is the short entry at 100
+    assert tr["fees_per_share"] == pytest.approx(fees, abs=1e-6)
+    assert tr["pnl_per_share"] == pytest.approx(2.0 - fees, abs=1e-4)  # stored at 4 dp
 
 
 def test_zero_costs_make_net_equal_gross():
@@ -288,6 +306,41 @@ def test_fast_replay_equals_exhaustive_candle_by_candle_replay_day():
     assert ev == 2 * 78 and fast == full
 
 
+# ===================================================================== regimes / modes
+
+def test_regime_uses_only_completed_daily_candles():
+    daily = Series("1Day", AAPL, CAL)
+    ts_ = ts(2016, 7, 13, 16) + 5
+    label = regime_at(daily, ts_)
+    assert label.startswith(("uptrend", "downtrend")) and "volatility" in label
+    wild = [b if b.time < ts(2016, 7, 14) else replace(b, close=b.close * 5, high=b.high * 5)
+            for b in AAPL]
+    assert regime_at(Series("1Day", wild, CAL), ts_) == label  # future cannot change it
+    assert regime_at(daily, ts(2015, 6, 1, 16)).startswith("unknown")  # < 200 sessions
+    up = [Bar(ts(2025, 1, 1) + 86400 * i, 100 + i, 101 + i, 99 + i, 100.5 + i, 1e6)
+          for i in range(400)]
+    assert regime_at(Series("1Day", up, CAL), up[-1].time + 86400 * 3).startswith("uptrend")
+
+
+def test_both_modes_in_one_run_are_split_by_mode_and_regime():
+    m = demo_market()
+    run = run_backtest(MarketHistory(m), mode="both", symbols=["NVDA"], start=date(2026, 2, 2),
+                       end=date(2026, 3, 6), cal=m.calendar, engine_cfg=ENGINE)
+    modes = {t["mode"] for t in run["trades"]}
+    assert "day" in modes and run["regime_basis"].startswith("SPY")
+    assert {d["mode"] for d in run["data_integrity"]} == {"day", "swing"}  # both replayed
+    rep = report(run)
+    assert sum(g["trades"] for g in rep["by_mode"].values()) == rep["overall"]["trades"]
+    assert sum(g["trades"] for g in rep["by_regime"].values()) == rep["overall"]["trades"]
+    assert report(run, mode="swing")["overall"]["trades"] == sum(
+        t["mode"] == "swing" for t in run["trades"])
+    assert rep["portfolio"]["trades_taken"] + sum(rep["portfolio"]["skipped"].values()) == \
+        rep["overall"]["trades"]
+    with pytest.raises(ValueError, match="limited"):
+        run_backtest(MarketHistory(m), mode="both", symbols=["NVDA"], start=date(2025, 1, 2),
+                     end=date(2026, 3, 6), cal=m.calendar, engine_cfg=ENGINE)
+
+
 # ===================================================================== metrics
 
 def _t(r, q=60.0, t=0, **kw):
@@ -307,6 +360,34 @@ def test_summary_metrics_by_hand():
     assert s["max_drawdown_r"] == 2.0  # +2 then -1, -1
     assert s["avg_planned_rr"] == 2.0 and s["avg_cost_r"] == pytest.approx(0.05)
     assert M.max_drawdown([0, 3, 1, 4, -2]) == 6
+
+
+def _pt(tid, entry_t, exit_t, pnl=1.0, risk=1.0, entry=100.0):
+    return {"id": tid, "entry_time": entry_t, "exit_time": exit_t, "pnl_per_share": pnl,
+            "risk_per_share": risk, "entry": entry}
+
+
+def test_portfolio_position_sizing_buying_power_and_same_candle_trades():
+    kw = dict(starting_capital=100_000, risk_pct=1.0, max_position_pct=25.0,
+              max_leverage=1.0, max_open=10)
+    # risk 1% of 100k = 1,000 / $1 risk = 1,000 shares; capped by 25% notional = 250 shares
+    p = M.portfolio([_pt("a", 0, 10)], **kw)
+    assert p["per_trade"]["a"]["shares"] == 250 and p["per_trade"]["a"]["sized_by"] == \
+        "position cap"
+    assert p["final_equity"] == 100_250 and p["total_return_pct"] == 0.25
+    # a trade that exits on its entry candle must release its capital
+    same = [_pt(f"s{i}", i, i) for i in range(20)]
+    assert M.portfolio(same, **kw)["trades_taken"] == 20
+    # five overlapping 25% positions with no margin: the fifth has no buying power
+    over = [_pt(f"o{i}", i, 100) for i in range(5)]
+    p = M.portfolio(over, **kw)
+    assert p["trades_taken"] == 4 and p["skipped"] == {"insufficient buying power": 1}
+    # wide stop: sized by risk, not the cap
+    p = M.portfolio([_pt("w", 0, 1, risk=10.0)], **kw)
+    assert p["per_trade"]["w"]["shares"] == 100 and p["per_trade"]["w"]["sized_by"] == "risk"
+    # drawdown in dollars and percent
+    p = M.portfolio([_pt("x", 0, 1, pnl=-4.0, risk=1.0), _pt("y", 2, 3, pnl=2.0)], **kw)
+    assert p["max_drawdown_usd"] == 1000 and p["max_drawdown_pct"] == 1.0
 
 
 def test_quality_correlation():
@@ -403,8 +484,8 @@ def test_backtest_api(tmp_path):
                                               "end": "2016-06-01", "settings": {"nope": 1}}
                       ).status_code == 400
         r = c.post("/api/backtests", json={"mode": "swing", "data_source": "bundled",
-                                           "symbols": ["AAPL"], "start": "2016-01-04",
-                                           "end": "2016-12-30"})
+                                           "symbols": ["AAPL"], "start": "2015-09-01",
+                                           "end": "2017-02-16"})
         assert r.status_code == 200
         run_id = r.json()["id"]
         deadline = time.monotonic() + 120
@@ -419,6 +500,12 @@ def test_backtest_api(tmp_path):
         runs = c.get("/api/backtests").json()["runs"]
         assert runs[0]["id"] == run_id and runs[0]["summary"]["trades"] == \
             j["report"]["overall"]["trades"]
+        assert j["report"]["trades"], "this period has AAPL swing trades"
+        tid = j["report"]["trades"][0]["id"]
+        ch = c.get(f"/api/backtests/{run_id}/trades/{tid}/chart").json()
+        assert ch["simulated"] is True and ch["timeframe"] == "1Day" and ch["bars"]
+        assert ch["bars"][0]["time"] < ch["trade"]["entry_time"] <= ch["bars"][-1]["time"]
+        assert c.get(f"/api/backtests/{run_id}/trades/nope/chart").status_code == 404
         csv_ = c.get(f"/api/backtests/{run_id}/trades.csv")
         assert csv_.status_code == 200 and csv_.text.startswith("id,ticker,strategy")
         assert len(csv_.text.strip().splitlines()) == j["report"]["overall"]["trades"] + 1

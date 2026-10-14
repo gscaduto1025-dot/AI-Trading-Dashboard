@@ -124,7 +124,8 @@ def _iso(ts: int | None) -> str | None:
 class MarketDataService:
     def __init__(self, source: Source, *, symbols: list[str],
                  now_fn: Callable[[], datetime] | None = None,
-                 calendar: MarketCalendar | None = None) -> None:
+                 calendar: MarketCalendar | None = None,
+                 monotonic: Callable[[], float] = time.monotonic) -> None:
         self.source = source
         self.feed = source.feed
         self.symbols = [s.upper() for s in symbols]
@@ -134,6 +135,7 @@ class MarketDataService:
         self._calendar_day: date | None = None
         self.calendar_error: str | None = None
         self._cache = _TTLCache()
+        self._mono = monotonic  # cache clock (injectable so tests can move time)
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------ time & calendar
@@ -219,7 +221,7 @@ class MarketDataService:
         now = self.now()
         cal = self.calendar
         key = ("candles", symbol, tf.key, session, limit)
-        cached = self._cache.get(key, time.monotonic())
+        cached = self._cache.get(key, self._mono())
         if isinstance(cached, DataError):
             raise cached
         if cached is not None:
@@ -232,10 +234,10 @@ class MarketDataService:
             raw = self.source.fetch_bars(symbol, tf.fetch, start, cutoff,
                                          max_items=MAX_HISTORY_BARS)
         except DataError as exc:
-            self._cache.put(key, exc, 10.0, time.monotonic())  # brief negative cache
+            self._cache.put(key, exc, 10.0, self._mono())  # brief negative cache
             raise
         result = self._build(symbol, tf, session, raw, now, cal, limit)
-        self._cache.put(key, result, self._ttl(tf, phase), time.monotonic())
+        self._cache.put(key, result, self._ttl(tf, phase), self._mono())
         return result
 
     def get_history(self, symbol: str, timeframe: str, start: datetime, end: datetime,
@@ -251,13 +253,13 @@ class MarketDataService:
         if start >= end:
             raise InvalidRequest("start must be before end (and before the feed's data cutoff)")
         key = ("history", symbol, tf.key, session, int(start.timestamp()), int(end.timestamp()))
-        cached = self._cache.get(key, time.monotonic())
+        cached = self._cache.get(key, self._mono())
         if cached is not None and not isinstance(cached, DataError):
             return cached
         raw = self.source.fetch_bars(symbol, tf.fetch, start, end, max_items=MAX_HISTORY_BARS)
         result = self._build(symbol, tf, session, raw, now, self.calendar, None)
         ttl = 86400.0 if result.complete and all(result.complete) else 60.0
-        self._cache.put(key, result, ttl, time.monotonic())
+        self._cache.put(key, result, ttl, self._mono())
         return result
 
     def _build(self, symbol: str, tf: TimeframeSpec, session: str, raw: list[Bar],
@@ -353,7 +355,7 @@ class MarketDataService:
         cal = self.calendar
         phase = cal.status(now)["phase"]
         key = ("quotes", tuple(self.symbols))
-        cached = self._cache.get(key, time.monotonic())
+        cached = self._cache.get(key, self._mono())
         if isinstance(cached, DataError):
             raise cached
         if cached is not None:
@@ -361,13 +363,13 @@ class MarketDataService:
         try:
             snaps = self.source.fetch_snapshots(self.symbols)
         except DataError as exc:
-            self._cache.put(key, exc, 10.0, time.monotonic())
+            self._cache.put(key, exc, 10.0, self._mono())
             raise
         cutoff = self.cutoff(now)
         current_day = cal.last_session_started(cutoff, "extended").day
         quotes = [self._quote(sym, snaps.get(sym), current_day, now, phase) for sym in self.symbols]
         ttl = 3600.0 if self.source.is_demo else (5.0 if phase != "closed" else 60.0)
-        self._cache.put(key, quotes, ttl, time.monotonic())
+        self._cache.put(key, quotes, ttl, self._mono())
         return quotes
 
     def _quote(self, symbol: str, snap: dict | None, current_day: date, now: datetime,

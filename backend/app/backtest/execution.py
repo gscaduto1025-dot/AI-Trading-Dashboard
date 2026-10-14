@@ -16,7 +16,8 @@ Rules (all costs adverse; every assumption is in BacktestConfig and reported):
 - Day trades exit at the session's last candle close; swing trades after `max_hold_bars`
   daily candles at the close; a series that ends (delisting / data end) exits at the last
   close. Those exits pay half spread and slippage.
-- Commission per share on each side.
+- Commission per share on each side; SEC fee and FINRA TAF on the sale (long exit /
+  short entry); stock-borrow fee on shorts for the calendar days held (minimum one day).
 R multiples use the risk at the actual fill (|fill - stop|).
 """
 
@@ -134,9 +135,14 @@ def simulate(sig: dict, bars: list[Bar], cfg: BacktestConfig, mode: str) -> tupl
 
     comm = 2 * cfg.commission_per_share
     exit_px = sum(g[0] * g[2][0] for g in legs)
-    pnl = sum(f * (px - fill) * sgn for f, _, (px, _, _, _) in legs) - comm
-    gross = sum(f * (rx - raw) * sgn for f, _, (_, _, _, rx) in legs)  # before any cost
     exit_time = max(g[2][2] for g in legs)
+    # Regulatory fees are charged on the sale: the exit of a long, the entry of a short.
+    sale_px = exit_px if long else fill
+    fees = cfg.sec_fee_rate * sale_px + cfg.finra_taf_per_share
+    days = max(1.0, (exit_time - eb.time) / 86400) if not long else 0.0
+    borrow = fill * cfg.short_borrow_bps_per_year / 1e4 * days / 360 if not long else 0.0
+    pnl = sum(f * (px - fill) * sgn for f, _, (px, _, _, _) in legs) - comm - fees - borrow
+    gross = sum(f * (rx - raw) * sgn for f, _, (_, _, _, rx) in legs)  # before any cost
     reasons = sorted({g[2][1] for g in legs})
     return {
         "id": sig["id"], "ticker": sig["ticker"], "mode": mode, "strategy": sig["strategy"],
@@ -151,6 +157,7 @@ def simulate(sig: dict, bars: list[Bar], cfg: BacktestConfig, mode: str) -> tupl
         "risk_per_share": round(risk, 4), "pnl_per_share": round(pnl, 4),
         "r": round(pnl / risk, 4), "gross_r": round(gross / risk, 4),
         "cost_per_share": round(gross - pnl, 4),
+        "fees_per_share": round(comm + fees + borrow, 6),
         "return_pct": round(100 * pnl / fill, 4),
         "mae_r": round(-mae / risk, 3), "mfe_r": round(mfe / risk, 3),
         "bars_held": held, "planned_rr": sig["planned_rr"], "quality": sig["quality"],

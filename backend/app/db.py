@@ -95,6 +95,33 @@ CREATE TABLE IF NOT EXISTS backtest_runs (
     result TEXT,
     error TEXT
 );
+-- The user's own trade log. ACTUAL and PAPER trades only: the CHECK constraint makes it
+-- impossible to store simulated backtest trades here (they live in backtest_runs).
+CREATE TABLE IF NOT EXISTS journal_trades (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account TEXT NOT NULL CHECK (account IN ('actual', 'paper')),
+    ticker TEXT NOT NULL,
+    direction TEXT NOT NULL CHECK (direction IN ('LONG', 'SHORT')),
+    strategy TEXT,
+    setup_id TEXT,
+    planned_stop REAL,
+    planned_target REAL,
+    notes TEXT NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS journal_fills (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id INTEGER NOT NULL REFERENCES journal_trades(id) ON DELETE CASCADE,
+    side TEXT NOT NULL CHECK (side IN ('BUY', 'SELL')),
+    quantity REAL NOT NULL CHECK (quantity > 0),
+    price REAL NOT NULL CHECK (price > 0),
+    fees REAL NOT NULL DEFAULT 0 CHECK (fees >= 0),
+    executed_at INTEGER NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    UNIQUE (trade_id, side, quantity, price, executed_at)  -- the same fill twice is rejected
+);
+CREATE INDEX IF NOT EXISTS journal_fills_trade ON journal_fills (trade_id);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -112,6 +139,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.Lock()
         with self._lock:
+            self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
 
     def close(self) -> None:
@@ -360,6 +388,92 @@ class Database:
                 "UPDATE backtest_runs SET status='interrupted', error=? WHERE status='running'",
                 ("The server stopped while this backtest was running.",))
         return cur.rowcount
+
+    # ---------------------------------------------------------------------- trade log
+
+    def journal_insert_trade(self, account: str, row: dict, fills: list[dict]) -> int:
+        """Insert a trade and its fills atomically (all or nothing)."""
+        now = int(time.time())
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """INSERT INTO journal_trades (account, ticker, direction, strategy, setup_id,
+                   planned_stop, planned_target, notes, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (account, row["ticker"], row["direction"], row.get("strategy"),
+                 row.get("setup_id"), row.get("planned_stop"), row.get("planned_target"),
+                 row.get("notes") or "", now, now))
+            tid = cur.lastrowid
+            for f in fills:
+                self._insert_fill(tid, f)
+        return tid
+
+    def _insert_fill(self, trade_id: int, f: dict) -> int:
+        cur = self._conn.execute(
+            """INSERT INTO journal_fills (trade_id, side, quantity, price, fees, executed_at, note)
+               VALUES (?,?,?,?,?,?,?)""",
+            (trade_id, f["side"], f["quantity"], f["price"], f.get("fees") or 0.0,
+             f["executed_at"], f.get("note") or ""))
+        return cur.lastrowid
+
+    def journal_add_fill(self, trade_id: int, f: dict) -> int:
+        with self._lock, self._conn:
+            fid = self._insert_fill(trade_id, f)
+            self._conn.execute("UPDATE journal_trades SET updated_at=? WHERE id=?",
+                               (int(time.time()), trade_id))
+        return fid
+
+    def journal_trades(self, account: str) -> list[dict]:
+        with self._lock:
+            trades = self._conn.execute(
+                "SELECT * FROM journal_trades WHERE account=? ORDER BY created_at DESC, id DESC",
+                (account,)).fetchall()
+            fills = self._conn.execute(
+                """SELECT f.* FROM journal_fills f JOIN journal_trades t ON t.id = f.trade_id
+                   WHERE t.account=? ORDER BY f.executed_at, f.id""", (account,)).fetchall()
+        by: dict[int, list] = {}
+        for f in fills:
+            by.setdefault(f["trade_id"], []).append(dict(f))
+        return [dict(t) | {"fills": by.get(t["id"], [])} for t in trades]
+
+    def journal_trade(self, account: str, trade_id: int) -> dict | None:
+        with self._lock:
+            t = self._conn.execute("SELECT * FROM journal_trades WHERE id=? AND account=?",
+                                   (trade_id, account)).fetchone()
+            if not t:
+                return None
+            fills = self._conn.execute(
+                "SELECT * FROM journal_fills WHERE trade_id=? ORDER BY executed_at, id",
+                (trade_id,)).fetchall()
+        return dict(t) | {"fills": [dict(f) for f in fills]}
+
+    def journal_update_trade(self, account: str, trade_id: int, fields: dict) -> bool:
+        allowed = {k: v for k, v in fields.items()
+                   if k in ("strategy", "setup_id", "planned_stop", "planned_target", "notes")}
+        if not allowed:
+            return False
+        sets = ", ".join(f"{k}=?" for k in allowed)
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                f"UPDATE journal_trades SET {sets}, updated_at=? WHERE id=? AND account=?",
+                (*allowed.values(), int(time.time()), trade_id, account))
+        return cur.rowcount > 0
+
+    def journal_delete_trade(self, account: str, trade_id: int) -> bool:
+        with self._lock, self._conn:
+            self._conn.execute("""DELETE FROM journal_fills WHERE trade_id IN
+                                  (SELECT id FROM journal_trades WHERE id=? AND account=?)""",
+                               (trade_id, account))
+            cur = self._conn.execute("DELETE FROM journal_trades WHERE id=? AND account=?",
+                                     (trade_id, account))
+        return cur.rowcount > 0
+
+    def journal_delete_fill(self, account: str, trade_id: int, fill_id: int) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """DELETE FROM journal_fills WHERE id=? AND trade_id=? AND trade_id IN
+                   (SELECT id FROM journal_trades WHERE account=?)""",
+                (fill_id, trade_id, account))
+        return cur.rowcount > 0
 
     # --------------------------------------------------------------------- watchlist / AI
 

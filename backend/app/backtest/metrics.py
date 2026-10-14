@@ -39,6 +39,9 @@ def summarize(trades: list[dict], risk_pct: float = 1.0) -> dict:
             exits[key] = exits.get(key, 0) + 1
     return {
         "trades": n, "wins": len(wins), "losses": len(losses),
+        "sample_note": (f"n={n}: too few trades to be statistically meaningful" if n < 30
+                        else f"n={n}: moderate sample; treat as indicative" if n < 100
+                        else f"n={n}"),
         "win_rate": _r(100 * len(wins) / n, 2),
         "avg_win_r": _r(gw / len(wins)) if wins else None,
         "avg_loss_r": _r(-gl / len(losses)) if losses else None,
@@ -93,6 +96,80 @@ def equity_curve(trades: list[dict], risk_pct: float = 1.0) -> dict:
                        "drawdown_pct": round(100 * (peak - eq) / peak, 4)})
     return {"points": points, "max_drawdown_pct": round(mdd, 3),
             "final_return_pct": round(eq - 100, 3)}
+
+
+def portfolio(trades: list[dict], *, starting_capital: float, risk_pct: float,
+              max_position_pct: float, max_leverage: float, max_open: int) -> dict:
+    """Position-sized simulation in dollars, in time order.
+
+    At each entry: shares = floor(equity x risk % / risk per share), capped by the
+    per-position notional limit and by the remaining buying power (equity x leverage minus
+    open notional); skipped if under one share or if `max_open` positions are open. Equity
+    for sizing is REALIZED equity (closed trades only). P&L uses the per-share result net
+    of every modelled cost. Exits at the same timestamp are processed before entries."""
+    events = []
+    for t in trades:
+        events.append((t["entry_time"], 1, t["id"], "entry", t))
+        # exits free capital before same-time entries - except a trade that exits on its
+        # own entry candle, whose exit must follow its entry
+        same_bar = t["exit_time"] <= t["entry_time"]
+        events.append((t["exit_time"], 2 if same_bar else 0, t["id"], "exit", t))
+    events.sort(key=lambda e: e[:3])
+    equity = peak = starting_capital
+    mdd = mdd_usd = 0.0
+    open_pos: dict[str, tuple[int, float]] = {}
+    per: dict[str, dict] = {}
+    skipped: dict[str, int] = {}
+    curve = []
+    max_conc = 0
+    for ts, _, tid, kind, t in events:
+        if kind == "exit":
+            if tid not in open_pos:
+                continue
+            sh, notional = open_pos.pop(tid)
+            pnl = sh * t["pnl_per_share"]
+            equity += pnl
+            peak = max(peak, equity)
+            mdd_usd = max(mdd_usd, peak - equity)
+            mdd = max(mdd, 100 * (peak - equity) / peak)
+            per[tid].update(pnl_usd=round(pnl, 2), equity_after=round(equity, 2))
+            curve.append({"time": ts, "equity": round(equity, 2),
+                          "drawdown_pct": round(100 * (peak - equity) / peak, 4)})
+            continue
+        if len(open_pos) >= max_open:
+            skipped["max open positions reached"] = skipped.get("max open positions reached",
+                                                                0) + 1
+            continue
+        if equity <= 0:
+            skipped["no equity left"] = skipped.get("no equity left", 0) + 1
+            continue
+        by_risk = math.floor(equity * risk_pct / 100 / t["risk_per_share"])
+        by_size = math.floor(equity * max_position_pct / 100 / t["entry"])
+        used = sum(n for _, n in open_pos.values())
+        by_power = math.floor(max(0.0, equity * max_leverage - used) / t["entry"])
+        sh = min(by_risk, by_size, by_power)
+        if sh < 1:
+            why = "insufficient buying power" if by_power < 1 else "position size under 1 share"
+            skipped[why] = skipped.get(why, 0) + 1
+            continue
+        open_pos[tid] = (sh, sh * t["entry"])
+        max_conc = max(max_conc, len(open_pos))
+        per[tid] = {"shares": sh, "notional": round(sh * t["entry"], 2),
+                    "risk_usd": round(sh * t["risk_per_share"], 2),
+                    "sized_by": "risk" if sh == by_risk else
+                    "position cap" if sh == by_size else "buying power"}
+    taken = [p for p in per.values() if "pnl_usd" in p]
+    return {
+        "starting_capital": starting_capital, "final_equity": round(equity, 2),
+        "total_pnl": round(equity - starting_capital, 2),
+        "total_return_pct": round(100 * (equity - starting_capital) / starting_capital, 3),
+        "max_drawdown_pct": round(mdd, 3), "max_drawdown_usd": round(mdd_usd, 2),
+        "trades_taken": len(taken), "skipped": skipped, "max_concurrent": max_conc,
+        "curve": curve, "per_trade": per,
+        "assumptions": f"{risk_pct}% of realized equity risked per trade, max "
+                       f"{max_position_pct}% of equity per position, buying power "
+                       f"{max_leverage}x equity, at most {max_open} open positions",
+    }
 
 
 def group(trades: list[dict], key: str, risk_pct: float) -> dict:

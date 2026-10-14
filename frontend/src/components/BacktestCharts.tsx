@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { niceTicks } from "@/lib/chartMath";
 
 // Chart palette (validated on the panel surface #0d1219: lightness band, chroma, CVD and
 // contrast all pass). Blue = gains / the series, red = losses / drawdown.
@@ -27,19 +28,6 @@ function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] 
   return [ref, w];
 }
 
-function niceTicks(min: number, max: number, count = 4): number[] {
-  if (!(max > min)) return [min];
-  const raw = (max - min) / count;
-  const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? raw;
-  // Round the domain OUTWARD so the first/last tick always contain the data.
-  const out = [];
-  const first = Math.floor(min / step + 1e-9) * step;
-  const last = Math.ceil(max / step - 1e-9) * step;
-  for (let v = first; v <= last + step / 2; v += step) out.push(+v.toFixed(10));
-  return out;
-}
-
 const fmtDay = (t: number) =>
   new Date(t * 1000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "2-digit", timeZone: "America/New_York" });
 
@@ -62,20 +50,24 @@ export function EquityChart({
   points,
   splitTime,
   height = 200,
+  base = 100,
+  fmt = (v: number) => v.toFixed(v % 1 ? 1 : 0),
 }: {
   points: { time: number; equity: number; drawdown_pct: number }[];
   splitTime?: number | null;
   height?: number;
+  base?: number;
+  fmt?: (v: number) => string;
 }) {
   const [ref, w] = useWidth<HTMLDivElement>();
   const [hover, setHover] = useState<number | null>(null);
   if (!points.length) return <p className="py-8 text-center text-xs text-faint">No closed trades.</p>;
-  const data = [{ time: points[0].time, equity: 100, drawdown_pct: 0 }, ...points];
+  const data = [{ time: points[0].time, equity: base, drawdown_pct: 0 }, ...points];
   const t0 = data[0].time;
   const t1 = data[data.length - 1].time || t0 + 1;
   const vals = data.map((p) => p.equity);
-  const lo = Math.min(...vals, 100);
-  const hi = Math.max(...vals, 100);
+  const lo = Math.min(...vals, base);
+  const hi = Math.max(...vals, base);
   const ticks = niceTicks(lo, hi === lo ? hi + 1 : hi, 4);
   const y0 = ticks[0];
   const y1 = ticks[ticks.length - 1];
@@ -97,16 +89,16 @@ export function EquityChart({
   return (
     <div ref={ref} className="relative">
       <svg width={w} height={height} onPointerMove={onMove} onPointerLeave={() => setHover(null)} role="img"
-        aria-label={`Equity curve from 100 to ${data[data.length - 1].equity.toFixed(1)}`}>
+        aria-label={`Equity curve from ${fmt(base)} to ${fmt(data[data.length - 1].equity)}`}>
         {ticks.map((t) => (
           <g key={t}>
             <line x1={PAD.l} x2={w - PAD.r} y1={Y(t)} y2={Y(t)} stroke={C.grid} strokeWidth={1} />
             <text x={PAD.l - 6} y={Y(t) + 3} textAnchor="end" fontSize={10} fill={C.muted} className="tabular-nums">
-              {t.toFixed(t % 1 ? 1 : 0)}
+              {fmt(t)}
             </text>
           </g>
         ))}
-        <line x1={PAD.l} x2={w - PAD.r} y1={Y(100)} y2={Y(100)} stroke={C.axis} strokeWidth={1} />
+        <line x1={PAD.l} x2={w - PAD.r} y1={Y(base)} y2={Y(base)} stroke={C.axis} strokeWidth={1} />
         {splitTime && splitTime > t0 && splitTime < t1 && (
           <g>
             <line x1={X(splitTime)} x2={X(splitTime)} y1={PAD.t} y2={PAD.t + ih} stroke={C.axis} strokeWidth={1} />
@@ -131,8 +123,8 @@ export function EquityChart({
       </svg>
       {h && hover != null && (
         <Tip x={X(h.time)} y={Y(h.equity)} w={w}>
-          <p className="font-semibold text-ink">{h.equity.toFixed(2)}</p>
-          <p className="text-muted">equity (start 100)</p>
+          <p className="font-semibold text-ink">{fmt(h.equity)}</p>
+          <p className="text-muted">equity (start {fmt(base)})</p>
           <p className="mt-0.5 text-ink">−{h.drawdown_pct.toFixed(2)}% <span className="text-muted">from peak</span></p>
           <p className="text-faint">{hover === 0 ? "start" : `after trade ${hover} · ${fmtDay(h.time)}`}</p>
         </Tip>
