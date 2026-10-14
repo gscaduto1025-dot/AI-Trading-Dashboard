@@ -57,6 +57,11 @@ CREATE TABLE IF NOT EXISTS strategy_signals (
     is_demo INTEGER NOT NULL,
     recorded_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS watchlist (
+    symbol TEXT PRIMARY KEY,
+    position INTEGER NOT NULL,
+    added_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -206,6 +211,19 @@ class Database:
         return out
 
     # --------------------------------------------------------------------- AI cache
+
+    def get_watchlist(self) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute("SELECT symbol FROM watchlist ORDER BY position").fetchall()
+        return [r["symbol"] for r in rows]
+
+    def set_watchlist(self, symbols: list[str]) -> None:
+        now = int(time.time())
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM watchlist")
+            self._conn.executemany(
+                "INSERT INTO watchlist (symbol, position, added_at) VALUES (?,?,?)",
+                [(s, i, now) for i, s in enumerate(symbols)])
 
     def get_ai(self, cache_key: str) -> dict | None:
         with self._lock:

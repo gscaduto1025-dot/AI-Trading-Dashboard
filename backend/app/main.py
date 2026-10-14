@@ -7,6 +7,7 @@ import contextlib
 import csv
 import io
 import logging
+import re
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -16,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
+from pydantic import BaseModel
 
 from .ai.claude import AIUnavailable, ClaudeAnalyst
 from .ai.facts import build_facts, cache_key as ai_cache_key, engine_status
@@ -35,14 +37,16 @@ from .levels.engine import InsufficientData, compute_key_levels
 from .levels.model import FETCH_LIMIT, MODE_FRAMES
 from .market.timeframes import SPECS, lookback_start, spec
 from .strategies.common import TRIGGERED, signal_id
-from .strategies.config import DAY_TRADING_UNIVERSE, StrategyConfig, load_strategy_config
+from .strategies.config import StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
 from .planning.config import PlanningConfig, load_planning_config
+from .scanner.engine import OpportunityScanner, filter_rows
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
 from .swing.engine import SORT_KEYS, SWING_STRATEGIES, evaluate_swing_symbol, sort_setups
 
 log = logging.getLogger("tradescope")
+SYMBOL_RE = re.compile(r"^[A-Z][A-Z0-9]{0,5}(?:[.-][A-Z]{1,2})?$")
 
 BAR_LIMIT = 300
 DISCLAIMER = ("Educational analysis only — not financial advice. "
@@ -79,6 +83,12 @@ class Service:
         self.swing_config: SwingConfig = load_swing_config()
         self.planning_config: PlanningConfig = load_planning_config()
         self._ai_locks: dict[str, threading.Lock] = {}
+        saved = self.db.get_watchlist()
+        if saved:
+            self.market.set_symbols(saved)
+        else:
+            self.db.set_watchlist(self.market.symbols)
+        self.scanner = OpportunityScanner(self)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
@@ -163,7 +173,8 @@ class Service:
             extra = self.engine_levels(report)
             ranked = sorted((l for l in report["levels"] if l["valid"]),
                             key=lambda l: -l["strength"]["score"])[:12]
-            summary = [{k: l[k] for k in ("label", "type", "timeframe", "low", "high", "side")}
+            summary = [{k: l[k] for k in ("label", "type", "category", "timeframe", "low",
+                                          "high", "side")}
                        | {"strength": l["strength"]["score"], "evidence": l["evidence"]["summary"]}
                        for l in ranked]
         except (AnalysisBlocked, DataError, InsufficientData) as exc:
@@ -183,7 +194,7 @@ class Service:
 
     @property
     def day_universe(self) -> list[str]:
-        return [s for s in DAY_TRADING_UNIVERSE if s in self.market.symbols]
+        return list(self.market.symbols)  # every watchlist ticker is scanned for day setups
 
     def strategy_setups(self, symbols: list[str] | None = None,
                         as_of: datetime | None = None, record: bool = True) -> dict:
@@ -462,42 +473,47 @@ class Service:
             self.db.put_ai(key, result)
         return {**base, "available": True, "cached": False, **result}
 
-    def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
-        results, alerts, errors = [], [], []
-        try:
-            alerts += self.strategy_setups()["new_alerts"]
-        except DataError as exc:
-            errors.append({"symbol": "*", "mode": "strategies", "code": exc.code,
-                           "error": str(exc)})
-        try:
-            alerts += self.swing_setups()["new_alerts"]
-        except DataError as exc:
-            errors.append({"symbol": "*", "mode": "swing_strategies", "code": exc.code,
-                           "error": str(exc)})
-        for mode in modes:
-            timeframe = DEFAULT_TIMEFRAME[mode]
-            for symbol in self.settings.watchlist:
-                try:
-                    a = self.analysis(symbol, mode, timeframe)
-                except AnalysisBlocked as exc:
-                    errors.append({"symbol": symbol, "mode": mode, "code": exc.code,
-                                   "error": exc.message})
-                    continue
-                except (DataError, ValueError) as exc:
-                    errors.append({"symbol": symbol, "mode": mode,
-                                   "code": getattr(exc, "code", "ERROR"), "error": str(exc)})
-                    continue
-                alert = self.db.record_setup(a, self.is_demo)
-                if alert:
-                    alerts.append(alert)
-                s = a["setup"]
-                results.append({"symbol": symbol, "mode": mode, "timeframe": timeframe,
-                                "status": s["status"], "title": s["title"],
-                                "direction": s["direction"], "risk_reward": s["risk_reward"],
-                                "confidence": s["confidence"]})
-        self.last_scan = int(time.time())
-        return {"scanned_at": self.last_scan, "results": results, "new_alerts": alerts,
-                "errors": errors, "is_demo": self.is_demo}
+    def scan(self) -> dict:
+        """Run the opportunity scanner now (also records alerts and the recent-setups
+        feed). Kept for /api/scan; the scheduled loop uses scanner.run()."""
+        snap = self.scanner.run(force=True, trigger="manual")
+        return {"scanned_at": self.last_scan, "results": snap["results"],
+                "new_alerts": snap["new_alerts"], "errors": snap["errors"],
+                "is_demo": self.is_demo, "scan_id": snap["scan_id"]}
+
+    # ------------------------------------------------------------------ watchlist
+
+    MAX_WATCHLIST = 30  # keeps a full scan inside the market-data rate limit
+
+    def add_symbol(self, symbol: str) -> list[str]:
+        sym = symbol.strip().upper()
+        if not SYMBOL_RE.match(sym):
+            raise InvalidRequest(f"{symbol!r} is not a valid ticker symbol.")
+        if sym in self.market.symbols:
+            raise InvalidRequest(f"{sym} is already on the watchlist.")
+        if len(self.market.symbols) >= self.MAX_WATCHLIST:
+            raise InvalidRequest(f"The watchlist is limited to {self.MAX_WATCHLIST} tickers.")
+        self.market.probe_symbol(sym)  # rejects tickers the feed has no data for
+        self._set_watchlist(self.market.symbols + [sym])
+        return self.market.symbols
+
+    def remove_symbol(self, symbol: str) -> list[str]:
+        sym = self.market.check_symbol(symbol)
+        if len(self.market.symbols) <= 1:
+            raise InvalidRequest("The watchlist needs at least one ticker.")
+        self._set_watchlist([s for s in self.market.symbols if s != sym])
+        return self.market.symbols
+
+    def _set_watchlist(self, symbols: list[str]) -> None:
+        self.market.set_symbols(symbols)
+        self.db.set_watchlist(symbols)
+        keep = set(symbols)
+        self._strategy_cache = {k: v for k, v in self._strategy_cache.items() if k[0] in keep}
+        self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] in keep}
+
+
+class WatchlistChange(BaseModel):
+    symbol: str
 
 
 class AnalysisBlocked(Exception):
@@ -552,10 +568,15 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                 await task
 
     async def _scanner(svc: Service) -> None:
+        """Server-side scheduler: every SCAN_INTERVAL_SECONDS, rescan only if a new eligible
+        candle can exist (or the watchlist changed). No browser tab is needed."""
         while True:
             try:
-                await run_in_threadpool(svc.scan)
-            except Exception:  # keep the loop alive; errors are surfaced per-symbol
+                if svc.scanner.due():
+                    await run_in_threadpool(svc.scanner.run, False, "scheduled")
+                svc.scanner.last_error = None
+            except Exception as exc:  # keep the loop alive; errors are surfaced per-symbol
+                svc.scanner.last_error = str(exc)
                 log.exception("Background scan failed")
             await asyncio.sleep(svc.settings.scan_interval_seconds)
 
@@ -576,7 +597,7 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             "feed": s.market.feed_info(),
             "ai_enabled": s.ai_enabled,
             "ai_model": s.settings.claude_model if s.ai_enabled else None,
-            "watchlist": s.settings.watchlist,
+            "watchlist": s.market.symbols,
             "all_timeframes": [{"key": k, "label": v.label} for k, v in SPECS.items()],
             "timeframes": MODE_TIMEFRAMES,
             "default_timeframes": DEFAULT_TIMEFRAME,
@@ -601,6 +622,47 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             raise _data_error(exc) from exc
         return {"is_demo": s.is_demo, "feed": s.market.feed_info(), "quotes": quotes,
                 "market": s.market.market_status()}
+
+    @app.post("/api/watchlist")
+    def add_to_watchlist(body: WatchlistChange) -> dict:
+        try:
+            symbols = svc().add_symbol(body.symbol)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+        return {"watchlist": symbols}
+
+    @app.delete("/api/watchlist/{symbol}")
+    def remove_from_watchlist(symbol: str) -> dict:
+        try:
+            symbols = svc().remove_symbol(symbol)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+        return {"watchlist": symbols}
+
+    @app.get("/api/scanner")
+    def scanner(mode: str | None = None, side: str | None = None, status: str | None = None,
+                min_rr: float | None = None, min_quality: float | None = None,
+                strategy: str | None = None, include_no_trade: bool = True) -> dict:
+        """Latest opportunity-scanner snapshot (computed server-side), filtered."""
+        s = svc()
+        if mode not in (None, "day", "swing") or side not in (None, "bullish", "bearish"):
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": "mode must be day|swing, side bullish|bearish"})
+        snap = s.scanner.snapshot or s.scanner.run(trigger="first request")
+        rows = filter_rows(snap["rows"], mode=mode, side=side, status=status, min_rr=min_rr,
+                           min_quality=min_quality, strategy=strategy,
+                           include_no_trade=include_no_trade)
+        return {**{k: v for k, v in snap.items() if k not in ("rows", "results", "new_alerts")},
+                "rows": rows, "total_rows": len(snap["rows"]),
+                "due": s.scanner.due(), "scan_count": s.scanner.scan_count,
+                "poll_seconds": s.settings.scan_interval_seconds,
+                "last_error": s.scanner.last_error}
+
+    @app.post("/api/scanner/run")
+    def scanner_run() -> dict:
+        snap = svc().scanner.run(force=True, trigger="manual")
+        return {"scan_id": snap["scan_id"], "finished_at": snap["finished_at"],
+                "rows": len(snap["rows"]), "duration_ms": snap["duration_ms"]}
 
     @app.get("/api/bars/{symbol}")
     def bars(symbol: str, timeframe: str = "5Min", session: str = "regular",

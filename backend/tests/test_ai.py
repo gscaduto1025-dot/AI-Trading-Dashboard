@@ -372,4 +372,5 @@ def test_ai_endpoints(service):
         assert c.post("/api/ai/SPY", params={"mode": "day", "setup_id": "nope"}).status_code == 400
         assert c.get("/api/ai/SPY", params={"mode": "weekly"}).status_code == 400
         meta = c.post("/api/ai/META", params={"mode": "day"}).json()
-        assert meta["status"] == "NO_TRADE" and meta["facts"]["setup"] is None
+        assert meta["facts"]["symbol"] == "META" and meta["status"] == meta["facts"]["setup"]["status"]
+        assert c.post("/api/ai/ZZZZ", params={"mode": "day"}).status_code == 400

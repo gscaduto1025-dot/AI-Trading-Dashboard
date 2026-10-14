@@ -46,7 +46,7 @@ class Settings:
     claude_effort: str = "medium"
     database_path: Path = BACKEND_DIR / "tradescope.db"
     watchlist: list[str] = field(default_factory=lambda: list(DEFAULT_WATCHLIST))
-    scan_interval_seconds: int = 300
+    scan_interval_seconds: int = 30  # scheduler poll; a scan runs only on new candles
     cors_origins: list[str] = field(default_factory=lambda: ["http://localhost:3000"])
 
     @property
@@ -84,7 +84,7 @@ def load_settings() -> Settings:
         claude_effort=os.environ.get("CLAUDE_EFFORT", "medium"),
         database_path=Path(db_path) if db_path else BACKEND_DIR / "tradescope.db",
         watchlist=watchlist,
-        scan_interval_seconds=int(os.environ.get("SCAN_INTERVAL_SECONDS", "300")),
+        scan_interval_seconds=int(os.environ.get("SCAN_INTERVAL_SECONDS", "30")),
         cors_origins=[
             o.strip()
             for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")

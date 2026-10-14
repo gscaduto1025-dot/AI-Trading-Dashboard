@@ -15,6 +15,7 @@ import type {
   PlansResponse,
   Quote,
   RecordedSetup,
+  ScannerRow,
   SessionKind,
   StrategyEvaluation,
   StrategySetup,
@@ -33,6 +34,7 @@ import PriceChart, { type ChartToggles } from "./PriceChart";
 import RecentSetups from "./RecentSetups";
 import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
+import ScannerView from "./ScannerView";
 import StrategySetupsPanel from "./StrategySetupsPanel";
 import SwingDetail from "./SwingDetail";
 import SwingScannerPanel from "./SwingScannerPanel";
@@ -116,7 +118,8 @@ export default function Dashboard() {
   const [swingSort, setSwingSort] = useState<SwingSortKey>("quality");
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
-  const [scanning, setScanning] = useState(false);
+  const [view, setView] = useState<"dashboard" | "scanner">("dashboard");
+  const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
     zones: true,
@@ -155,6 +158,8 @@ export default function Dashboard() {
           setHealth(h);
           setFeed(h.feed);
           setBackendError(null);
+          // The displayed ticker may have been removed from the watchlist.
+          if (h.watchlist.length && !h.watchlist.includes(symbol)) setSymbol(h.watchlist[0]);
         })
         .catch((e) => setBackendError(errorText(e)));
       api
@@ -163,7 +168,7 @@ export default function Dashboard() {
         .catch(() => {});
     },
     30_000,
-    [],
+    [wlVersion],
   );
 
   usePolling(
@@ -182,7 +187,7 @@ export default function Dashboard() {
         });
     },
     quoteRefreshMs,
-    [quoteRefreshMs, health !== null],
+    [quoteRefreshMs, health !== null, wlVersion],
   );
 
   const loadChart = useCallback(() => {
@@ -347,16 +352,19 @@ export default function Dashboard() {
     setTimeframe(tf);
   };
 
-  const runScan = async () => {
-    setScanning(true);
-    try {
-      await api.scan();
-      loadFeeds();
-    } catch (e) {
-      setBackendError(errorText(e));
-    } finally {
-      setScanning(false);
-    }
+  // Opening a scanner result shows its chart, trade plan, levels and AI analysis.
+  const openScannerRow = (r: ScannerRow) => {
+    setView("dashboard");
+    setSymbol(r.ticker);
+    setMode(r.mode);
+    setTimeframe(r.timeframe);
+    setSession("regular");
+    setSelectedSetupId(r.id);
+  };
+  const openScannerTicker = (sym: string) => {
+    setView("dashboard");
+    setSelectedSetupId(null);
+    setSymbol(sym);
   };
 
   const ack = async (id: number) => {
@@ -452,13 +460,21 @@ export default function Dashboard() {
               </button>
             ))}
           </div>
-          <button
-            onClick={runScan}
-            disabled={scanning}
-            className="rounded-md px-3 py-1.5 text-xs font-semibold text-ink ring-1 ring-line-strong transition hover:bg-white/5 disabled:opacity-50"
-          >
-            {scanning ? "Scanning…" : "Scan watchlist"}
-          </button>
+          <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" role="tablist" aria-label="View">
+            {(["dashboard", "scanner"] as const).map((v) => (
+              <button
+                key={v}
+                role="tab"
+                aria-selected={view === v}
+                onClick={() => setView(v)}
+                className={`rounded px-3 py-1 text-xs font-semibold transition ${
+                  view === v ? "bg-ink text-bg" : "text-muted hover:text-ink"
+                }`}
+              >
+                {v === "dashboard" ? "Chart & analysis" : "Opportunity scanner"}
+              </button>
+            ))}
+          </div>
           <span
             className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold uppercase ring-1 ${
               backendError || dataDown ? "text-bear ring-bear/40" : isDemo ? "text-wait ring-wait/40" : "text-bull ring-bull/40"
@@ -490,6 +506,14 @@ export default function Dashboard() {
       )}
 
       {/* Main grid */}
+      {view === "scanner" ? (
+        <ScannerView
+          onOpenRow={openScannerRow}
+          onOpenTicker={openScannerTicker}
+          onWatchlistChanged={() => setWlVersion((v) => v + 1)}
+        />
+      ) : (
+      <>
       <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[220px_minmax(0,1fr)_330px] xl:grid-cols-[240px_minmax(0,1fr)_360px]">
         <div className="lg:h-[620px]">
           <Watchlist
@@ -670,6 +694,8 @@ export default function Dashboard() {
           <AlertsPanel alerts={alerts} onAck={ack} notifyEnabled={notify} onToggleNotify={toggleNotify} />
         </div>
       </section>
+      </>
+      )}
 
       <footer className="border-t border-line px-4 py-2.5 text-center text-[10px] text-faint">
         {health?.disclaimer ?? "Educational analysis only — not financial advice."}{" "}

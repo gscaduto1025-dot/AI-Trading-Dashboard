@@ -14,6 +14,8 @@ import type {
   SessionKind,
   StrategyEvaluation,
   PlansResponse,
+  ScannerFilters,
+  ScannerSnapshot,
   SwingEvaluation,
   SwingSortKey,
 } from "./types";
@@ -90,6 +92,16 @@ export const api = {
   levels: (symbol: string, mode: Mode, timeframe: string) =>
     request<KeyLevelReport>(`/api/levels/${symbol}?${q({ mode, timeframe })}`),
   strategySetups: () => request<StrategyEvaluation>("/api/strategies/setups"),
+  scanner: (f: ScannerFilters) => request<ScannerSnapshot>(`/api/scanner?${q({ ...f })}`),
+  scannerRun: () => request<{ scan_id: number }>("/api/scanner/run", { method: "POST" }),
+  addSymbol: (symbol: string) =>
+    request<{ watchlist: string[] }>("/api/watchlist", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol }),
+    }),
+  removeSymbol: (symbol: string) =>
+    request<{ watchlist: string[] }>(`/api/watchlist/${encodeURIComponent(symbol)}`, { method: "DELETE" }),
   plans: (symbol: string, mode: Mode) => request<PlansResponse>(`/api/plans/${symbol}?${q({ mode })}`),
   swingSetups: (sort: SwingSortKey = "quality") => request<SwingEvaluation>(`/api/swing/setups?${q({ sort })}`),
   aiCached: (symbol: string, mode: Mode, setupId: string | null) =>

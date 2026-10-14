@@ -91,8 +91,8 @@ Other settings in `backend/.env`:
 | `ALPACA_RATE_LIMIT_PER_MIN`, `ALPACA_MAX_RETRIES`, `ALPACA_TIMEOUT_SECONDS` | Client-side rate limit (default 190/min, under the free plan's 200), retries, timeout |
 | `ANTHROPIC_API_KEY` | Enables the **Claude AI Analysis** panel |
 | `CLAUDE_MODEL`, `CLAUDE_EFFORT` | Default `claude-opus-5-5`, `medium` |
-| `WATCHLIST` | Comma-separated symbols the API will serve |
-| `SCAN_INTERVAL_SECONDS` | Background scanner interval (default 300, `0` disables it) |
+| `WATCHLIST` | Initial watchlist (first start only; afterwards it is edited in the app and saved in SQLite) |
+| `SCAN_INTERVAL_SECONDS` | How often the server checks for newly closed candles (default 30; a scan runs only when there are new candles; `0` disables the scheduler) |
 
 If Alpaca is configured but fails, the app shows **MARKET DATA UNAVAILABLE**. It never falls
 back to demo data and never shows an old price as current.
@@ -130,6 +130,8 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
 - **Claude explanations** (`tests/test_ai.py`, scripted fake client, no network): number
   verification, schema validation, engine authority over status and levels, guarantee
   filtering, every API failure mode, caching, setup selection and the endpoints.
+- **Opportunity scanner** (`tests/test_scanner.py`): rows equal the engine output, filters,
+  ranking, stale-data flags, candle-aware scheduling, no Claude calls, watchlist management.
 - **Engine, demo data, API and alerts.**
 
 ## How it works
@@ -149,16 +151,19 @@ backend/app/
   levels/                  key-level detection engine
   strategies/              day-trading strategy engine (5m/15m)
   swing/                   swing-trading strategy engine (daily/weekly, 4H/1H support)
+  planning/                trade-planning and risk engine (shared)
+  scanner/                 multi-stock opportunity scanner (candle-aware schedule)
   ai/facts.py              verified fact sheet Claude explains (all allowed numbers)
   ai/validate.py           output schema + validation against the fact sheet
   ai/claude.py             Claude request (structured JSON output, fallbacks)
-  db.py                    SQLite: detected setups, alerts, AI response cache
+  db.py                    SQLite: watchlist, detected setups, signals, alerts, AI cache
   main.py                  FastAPI routes + background scanner
 frontend/src/components/
   Dashboard.tsx            layout, data flow, auto-refresh
   MarketStatusBar.tsx      session status, feed, latency, latest candle, volume
   PriceChart.tsx           TradingView Lightweight Charts
-  ...                      watchlist, setup, bias, levels, AI, setups, alerts panels
+  ScannerView.tsx          opportunity scanner: filters, bullish/bearish tables, watchlist
+  ...                      watchlist, trade plan, bias, levels, AI, setups, alerts panels
 ```
 
 ### Market data service
@@ -212,7 +217,7 @@ Any timeframe can be charted in either mode. The mode only changes the analysis 
 
 ### Day-trading strategy engine (`backend/app/strategies`)
 
-The engine evaluates SPY, QQQ, NVDA, TSLA, AAPL, AMD and MSFT on **5-minute and
+The engine evaluates every watchlist ticker on **5-minute and
 15-minute** candles, using **1-hour and daily** candles for higher-timeframe context. Each
 of the five strategies runs independently for each symbol × timeframe × direction and
 returns a status:
@@ -726,14 +731,97 @@ It shows:
 Without `ANTHROPIC_API_KEY`, the panel shows the calculated analysis and the unavailable
 message.
 
+### Opportunity scanner (`backend/app/scanner`)
+
+The **Opportunity scanner** view (header toggle) scans every watchlist ticker for day- and
+swing-trading setups. Initial watchlist: SPY, QQQ, NVDA, TSLA, AAPL, AMD, MSFT, META, AMZN.
+Add or remove tickers in the scanner view (`POST /api/watchlist`, `DELETE /api/watchlist/{symbol}`):
+- tickers are validated against the feed; with Alpaca, a symbol it has no data for is rejected;
+- at most 30 tickers, so a full scan stays inside the rate limit;
+- the list is saved in SQLite and survives restarts.
+
+**Where the results come from.** Every row is a setup produced by the day-trading or
+swing-trading strategy engine and planned by the trade-planning engine. The scanner copies
+the following and recalculates nothing:
+- status, entry trigger, stop, targets and R:R;
+- the quality score;
+- the confirmation conditions and failed checks.
+
+Tests check every row against the engine output, field by field. Rows include:
+- **triggered** and **watching** setups;
+- setups that **fail requirements**: a pattern was detected, with an objective trigger, but
+  the plan is NO_TRADE. The failed checks are shown.
+
+Each row is tagged with its family: breakout, retest, pullback or reversal. Rows are ranked
+by status, then quality score, then R:R. Bullish and bearish setups appear in separate
+tables.
+
+**Per-ticker summary:**
+- price and change;
+- day and swing market bias;
+- the nearest important support and resistance, from zones and reference/swing levels of
+  the key-level engine, with distance in % and ATR, and "near" within 0.5 ATR or inside the
+  zone;
+- counts by status;
+- data freshness and the last completed candle for each mode.
+
+**Stale or missing data.** A ticker whose candles are stale, invalid or unavailable is
+flagged in red with the reason. The engines' data gates make its setups NO_TRADE, and the
+scanner marks them not actionable ("Data stale: ..."). The other tickers are unaffected.
+
+**Filters** (UI and `GET /api/scanner`):
+- `mode=day|swing`;
+- `side=bullish|bearish`;
+- `status=TRIGGERED,WATCHING,NO_TRADE`;
+- `min_rr`;
+- `min_quality`;
+- `strategy`: a family such as `breakout`, or a strategy id;
+- `include_no_trade`.
+
+**Automatic updates, server-side.**
+- **Schedule:** a background task checks every `SCAN_INTERVAL_SECONDS` (default 30)
+  whether a new eligible candle can exist: the watchlist, the number of completed 5-minute
+  candles in the current session, and the last completed daily session.
+- **Rescans:** a scan runs only when that changes, on startup, after a watchlist edit, or
+  on **Scan now** (`POST /api/scanner/run`). No browser tab is needed.
+- **No redundant work:** candles are cached per timeframe, strategy results per candle, and
+  the market-data client's token bucket paces every request under the feed's rate limit.
+- **No Claude calls:** the scanner never calls Claude; AI explanations are generated only in
+  the AI panel and are cached.
+
+Each snapshot records the following, and the view polls the snapshot every 15 s:
+- scan id, trigger, start and finish times, duration;
+- the feed;
+- per-row last-updated time, data freshness and last candle.
+
+**Click-through**: clicking a row opens that ticker in the chosen mode and timeframe on the
+**Chart & analysis** view, with the setup selected. That view shows:
+- the chart with the plan drawn;
+- the Trade Plan and Setup details;
+- key levels and bias;
+- the AI analysis of that setup.
+
+Clicking a ticker card opens its chart.
+
+**Tests** (`tests/test_scanner.py`):
+- every row equals the engine's setup and plan; reporting a different stop makes this test fail;
+- every detected setup is listed once and ranked;
+- requirement failures and actionability are set correctly;
+- ticker summaries, and every filter;
+- stale and unavailable tickers are flagged and never actionable;
+- candle-aware scheduling: no rescan inside a forming 5-minute candle, rescans on a new
+  candle, the close or a watchlist change;
+- no Claude calls;
+- watchlist add/remove/validation/persistence, and the API.
+
 ### Alerts
 
-The scanner runs on startup and every `SCAN_INTERVAL_SECONDS`, or when you press **Scan
-watchlist**. It covers each symbol in both modes on the default timeframe (5m / 1D), plus the
-day-trading and swing strategy scanners. An
-alert fires when a symbol's setup starts forming or becomes actionable. Re-scans of unchanged
-data don't duplicate alerts. Turn on **Notify** in the Alerts panel to get browser
-notifications for actionable setups.
+The scheduled scanner (and **Scan now**) records alerts:
+- every new accepted strategy trigger (day and swing) goes into the immutable signal log;
+- the default-timeframe analysis feeds "Recently detected setups".
+
+Re-scans of unchanged data don't duplicate alerts. Turn on **Notify** in the Alerts panel
+to get browser notifications for actionable setups.
 
 ## API
 
@@ -754,6 +842,8 @@ notifications for actionable setups.
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |
 | GET | `/api/ai/{symbol}?mode=day\|swing[&setup_id=]` | cached Claude explanation + verified fact sheet (never calls Claude) |
 | POST | `/api/ai/{symbol}?mode=day\|swing[&setup_id=&refresh=true]` | generate (or return cached) validated Claude explanation |
-| POST | `/api/scan` | scan the watchlist now |
+| GET | `/api/scanner[?mode=&side=&status=&min_rr=&min_quality=&strategy=&include_no_trade=]` | latest opportunity-scanner snapshot (server-side, filtered) |
+| POST | `/api/scanner/run` · `/api/scan` | scan the watchlist now |
+| POST / DELETE | `/api/watchlist` (`{"symbol": "IWM"}`) · `/api/watchlist/{symbol}` | add / remove a ticker (validated, persisted) |
 | GET | `/api/setups/recent` | recently detected setups |
 | GET | `/api/alerts` / POST `/api/alerts/{id}/ack` | alerts |

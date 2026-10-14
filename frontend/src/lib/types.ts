@@ -573,3 +573,92 @@ export interface PlansResponse {
   min_rr?: number;
   is_demo: boolean;
 }
+
+// ------------------------------------------------------------- opportunity scanner
+
+export interface ScannerRow {
+  id: string;
+  ticker: string;
+  mode: Mode;
+  price: number | null;
+  market_bias: string | null;
+  setup: string;
+  strategy: string;
+  pattern: "breakout" | "retest" | "pullback" | "reversal" | "other";
+  timeframe: string;
+  direction: "LONG" | "SHORT";
+  side: "bullish" | "bearish";
+  entry_trigger: number | null;
+  entry: number | null;
+  stop: number | null;
+  target1: number | null;
+  target2: number | null;
+  risk_reward: number | null;
+  quality: number | null;
+  status: StrategyStatus;
+  meets_requirements: boolean;
+  actionable: boolean;
+  requirement_issues: string[];
+  reason: string;
+  distance_to_trigger_pct: number | null;
+  last_updated: string | null;
+  data_freshness: Freshness | "invalid" | null;
+  data_as_of: string | null;
+  last_candle: string | null;
+}
+
+export interface ScannerLevel {
+  label: string;
+  low: number;
+  high: number;
+  timeframe: string | null;
+  strength: number | null;
+  distance_pct: number | null;
+  distance_atr: number | null;
+  near: boolean;
+  inside: boolean;
+}
+
+export interface ScannerTicker {
+  ticker: string;
+  price: number | null;
+  change_pct: number | null;
+  data: Record<Mode, { freshness: string; reason: string | null; as_of: string | null; last_candle: string | null; timeframe: string }>;
+  bias: Partial<Record<Mode, string>>;
+  levels: Partial<Record<Mode, { support: ScannerLevel | null; resistance: ScannerLevel | null }>>;
+  flags: string[];
+  flagged: boolean;
+  counts: Record<StrategyStatus, number>;
+}
+
+export interface ScannerSnapshot {
+  scan_id: number;
+  trigger: string;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+  is_demo: boolean;
+  feed: FeedInfo;
+  market_phase: string;
+  watchlist: string[];
+  tickers: ScannerTicker[];
+  rows: ScannerRow[];
+  total_rows: number;
+  errors: { symbol: string; mode: string; code: string; error: string }[];
+  strategies: string[];
+  signature: (string | number)[];
+  due: boolean;
+  scan_count: number;
+  poll_seconds: number;
+  last_error: string | null;
+}
+
+export interface ScannerFilters {
+  mode?: Mode;
+  side?: "bullish" | "bearish";
+  status?: string;
+  min_rr?: number;
+  min_quality?: number;
+  strategy?: string;
+  include_no_trade?: boolean;
+}

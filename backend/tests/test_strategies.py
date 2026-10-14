@@ -399,8 +399,9 @@ def test_config_rejects_unknown_keys():
 
 def test_api_strategy_setups_demo(client):
     j = client.get("/api/strategies/setups").json()
-    assert j["universe"] == ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT"]
-    assert len(j["setups"]) == 7 * 5 * 2 * 2
+    # Every watchlist ticker is scanned for day setups.
+    assert j["universe"] == ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"]
+    assert len(j["setups"]) == 9 * 5 * 2 * 2
     assert all(s["is_demo"] for s in j["setups"])
     cfg = client.get("/api/strategies/config").json()
     assert [d["id"] for d in cfg["definitions"]] == [

@@ -180,6 +180,20 @@ class MarketDataService:
 
     # ------------------------------------------------------------------------ candles
 
+    def set_symbols(self, symbols: list[str]) -> None:
+        """Replace the watchlist (candle caches are per symbol and stay valid)."""
+        self.symbols = [s.upper() for s in symbols]
+
+    def probe_symbol(self, symbol: str) -> None:
+        """Raise InvalidRequest unless the feed has market data for `symbol`. Demo data
+        simulates any ticker (clearly labelled DEMO DATA)."""
+        if self.source.is_demo:
+            return
+        snaps = self.source.fetch_snapshots([symbol])
+        snap = snaps.get(symbol) or {}
+        if not (snap.get("latestTrade") or snap.get("dailyBar")):
+            raise InvalidRequest(f"No market data for {symbol!r} on the {self.feed.label} feed.")
+
     def check_symbol(self, symbol: str) -> str:
         symbol = symbol.upper()
         if symbol not in self.symbols:
@@ -336,7 +350,7 @@ class MarketDataService:
         now = self.now()
         cal = self.calendar
         phase = cal.status(now)["phase"]
-        key = ("quotes",)
+        key = ("quotes", tuple(self.symbols))
         cached = self._cache.get(key, time.monotonic())
         if isinstance(cached, DataError):
             raise cached

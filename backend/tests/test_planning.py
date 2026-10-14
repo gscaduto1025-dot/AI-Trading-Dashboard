@@ -310,7 +310,8 @@ def test_plans_api_and_config(client):
                   "risk_reward_t1", "confirmation", "invalidation", "checks", "quality"):
             assert k in p
     meta = client.get("/api/plans/META", params={"mode": "day"}).json()
-    assert meta["plans"] == [] and "not in the day-trading universe" in meta["reason"]
+    assert meta["symbol"] == "META" and meta["plans"]  # whole watchlist is scanned
+    assert client.get("/api/plans/ZZZZ", params={"mode": "day"}).status_code == 400
     assert client.get("/api/plans/SPY", params={"mode": "weekly"}).status_code == 400
     cfg = client.get("/api/planning/config").json()
     assert cfg["config"]["min_rr"] == 2.0
