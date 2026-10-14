@@ -112,6 +112,9 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   401/403, the rate limiter, the regular vs extended session, 1H/4H anchoring, early closes,
   holidays, stale-feed detection, delayed-SIP cutoffs, corrupt candles, caching, pre-market
   quote math, calendar fallback, and the API's unavailable/history/CSV responses.
+- **Key-level engine** (`tests/test_key_levels.py`): real AAPL/GOOG fixtures against
+  independent reference implementations, no-look-ahead checks, splits, and hand-computed
+  intraday fixtures (see the key-level section below).
 - **Calendar and validation**: NYSE 2025/2026 holidays and early closes vs the published
   schedules, observance rules, session phases, DST, OHLCV and timestamp-order checks.
 - **Engine, demo data, API, alerts and Claude** (with a stubbed client).
@@ -189,6 +192,105 @@ frontend/src/components/
 
 Any timeframe can be charted in either mode. The mode only changes the analysis parameters.
 
+### Key-level engine (`backend/app/levels`)
+
+`GET /api/levels/{symbol}?mode=day|swing&timeframe=5Min[&as_of=ISO]` returns every level with
+its ticker, type, price or range (`low`/`high`), timeframe(s), `calculated_at`, `formed_at`
+(when it first became knowable), evidence (a summary, the rule's inputs, and the candles that
+support it), a strength score with its components, `valid`, and a status.
+
+**Inputs and point-in-time rule.** Each mode uses these timeframes:
+
+| Mode | Timeframes used |
+| --- | --- |
+| Day | 5m, 15m, 1H, daily, weekly |
+| Swing | 1H, 4H, daily, weekly |
+
+All candles are regular-session and split-adjusted (`ALPACA_ADJUSTMENT=split` by default).
+Before any calculation, every candle that had not closed by `as_of` is dropped. Anything
+that needs later candles (swings, breakouts) records when it was confirmed and is never
+reported before then. Passing `as_of` replays any past moment for backtests. Tests check
+that adding future candles changes nothing in the output.
+
+**Common quantities.**
+- **ATR**: Wilder's average true range over 14 candles of the level's timeframe.
+- **EMA(p)**: α = 2/(p+1), seeded with the SMA of the first p closes. It's flagged
+  unreliable with fewer than 3p candles.
+- **Current session**: today while today's 04:00–20:00 ET extended session is still running,
+  otherwise the next trading day. The **previous session** is the trading day before it.
+
+| # | Level | Rule |
+| --- | --- | --- |
+| 1-2 | **PDH / PDL** | High/low of the previous session's regular hours (09:30–close) from the finest intraday candles that cover the whole session. Falls back to the daily candle. |
+| 3-4 | **PWH / PWL** | High/low of the daily candles in the last complete ISO week before the current session's week (holiday-shortened weeks included). |
+| 5 | **Session open** | Open of the current session's 09:30 candle, once that candle has closed (day mode). |
+| 6-7 | **ORH / ORL** | High/low of the 09:30–10:00 candles. Reported only after 10:00 and only if every candle is present. |
+| 8-11 | **Support / resistance zones** | See the zone algorithm below. |
+| 12-13 | **Swing high / low** | Fractal over k candles each side (k = 3, or 2 for 4H and weekly): `high[i] > max(high[i-k..i-1])` and `high[i] >= max(high[i+1..i+k])` (mirror for lows). Confirmed when candle i+k closes. The two most recent per timeframe are reported, and become invalid once a later candle trades beyond them. |
+| 14 | **Session VWAP** | Σ(typical price × volume) / Σ volume over the current session's candles, where typical price = (H+L+C)/3, anchored 09:30. Valid while the session is open. |
+| 15-18 | **EMA 9/20/50/200** | On 5m and daily (day mode) or daily (swing mode). The chart draws them on whatever timeframe is shown. |
+| 19 | **Liquidity areas** | At least 2 confirmed swing highs within 0.1 ATR ("equal highs") that no later candle has exceeded give a *potential* buy-side area of [top, top + 0.25 ATR]; equal lows mirror this. A sweep within the last 10 candles is reported as swept, or "swept and rejected" if that candle closed back inside. This is not observed order flow. |
+| 20 | **Breakouts / breakdowns** | On the trigger timeframe (5m day, daily swing), candle i closes beyond the level by more than 0.1 × ATR (taken at candle i−1) after closing on the near side, and candle i+1 also closes beyond it. Confirmation time is candle i+1's close. A zone's bounds come only from pivots confirmed before candle i. A later close back through the far side marks it failed. |
+
+**Zone algorithm.** Zones are computed on 1H/daily/weekly (day mode) or 4H/daily/weekly
+(swing mode), over the last 500 / 500 / 260 candles (4H: 400).
+1. Find the confirmed swing highs and lows.
+2. Sort them by price and cluster greedily: a pivot joins a cluster if it's within
+   0.5 ATR of the cluster's top and the cluster stays no wider than 0.75 ATR.
+3. A cluster with at least 2 reactions becomes a zone, spanning its lowest to highest pivot
+   and widened symmetrically to at least 0.25 ATR. Zones are ranges, not single prices.
+4. The zone is **support** if it's below the last price, **resistance** if above, or
+   **contested** if price is inside it. If it last reacted in the other role, it's "flipped".
+5. If closes have crossed through it 3 or more times since its last reaction, it's
+   **invalidated** (no longer respected).
+6. Combining timeframes: working from weekly down, a lower-timeframe zone whose midpoint
+   lies inside a higher-timeframe zone is attached to it as extra evidence and doesn't
+   change its bounds. Otherwise it stands alone.
+
+**Strength score (0–100).** A transparent heuristic, **not** a probability of reversal:
+
+```
+score = R + C + T + F
+R  reactions   = 7 × min(reactions, 5)                                   (0–35)
+C  recency     = 25 × 0.5^(days since last reaction / 30)                (0–25)
+T  timeframe   = 5m 4 · 15m 6 · 30m 8 · 1H 10 · 4H 13 · daily 16 · weekly 20
+F  confluence  = 5 × min(# other level types overlapping within 0.15 daily ATR, 4)   (0–20)
+```
+
+For zones, `reactions` is the number of pivots in the zone. For other levels, it's the number
+of confirmed pivots (any timeframe in the plan) within the level ± 0.15 daily ATR. Labels:
+<35 weak, 35–59 moderate, ≥60 strong. Every level returns its components and inputs.
+
+**Splits.** History is requested split-adjusted. As a safety net, an overnight gap within
+5% of a common split ratio (2:1 … 50:1, or a reverse split) with at least a 45% move and
+share volume moving in the same proportion is treated as an unadjusted split. Only candles
+from that date on are then used, and a warning is returned. `ALPACA_ADJUSTMENT=raw` also
+returns a warning.
+
+**Chart styles.**
+
+| Level family | Drawn as |
+| --- | --- |
+| Support / resistance zones | Green / red shaded bands; daily and weekly zones are more opaque. Shows the nearest 3 per side with a strength of at least 35. |
+| Liquidity | Purple dashed band |
+| PDH / PDL | Cyan dotted line |
+| PWH / PWL | Orange dashed line |
+| Session open, ORH / ORL | Grey lines |
+| VWAP | Amber dashed line |
+| EMA 9 / 20 / 50 / 200 | Blue / purple / teal / white lines |
+| Swing points | Grey dots |
+| Breakouts / breakdowns | Green / red arrows plus a solid line (✕ when failed) |
+
+The **Key Technical Levels** panel lists everything, with filters, evidence and the score
+breakdown. The setup engine also uses valid key levels for its breakout, pullback and target
+logic.
+
+**Tests** (`tests/test_key_levels.py`) run on real AAPL (2015–17) and GOOG (2004–13) daily
+candles, comparing PDH/PDL/PWH/PWL, EMA, ATR, swing points and zones with separately written
+reference implementations. They also check that adding future candles changes nothing, that
+swings and breakouts aren't confirmed early, split detection, and hand-computed intraday
+fixtures for the opening range, VWAP and breakout timing.
+
 ### Setup engine
 
 - **Market bias** scores up to six factors (price vs slow EMA, fast vs slow EMA, slow EMA
@@ -227,6 +329,7 @@ notifications for actionable setups.
 | GET | `/api/market/status` | session phase, holiday/early close, next open/close, calendar source |
 | GET | `/api/watchlist` | quotes: price, change, volume, last-trade time, latency |
 | GET | `/api/bars/{symbol}?timeframe=5Min&session=regular\|extended&limit=300` | candles + completion + data status + quality report |
+| GET | `/api/levels/{symbol}?mode=day&timeframe=5Min[&as_of=2026-03-05T12:00]` | automatic key levels with evidence, strength, validity (point-in-time replay with `as_of`) |
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |
 | POST | `/api/ai/{symbol}?mode=day&timeframe=5Min[&refresh=true]` | Claude explanation |

@@ -6,6 +6,7 @@ import type {
   DataStatus,
   FeedInfo,
   Health,
+  KeyLevelReport,
   MarketStatus,
   Mode,
   Quote,
@@ -82,6 +83,8 @@ export const api = {
     request<CandleResponse>(`/api/bars/${symbol}?${q({ timeframe, session })}`),
   analysis: (symbol: string, mode: Mode, timeframe: string) =>
     request<Analysis>(`/api/analysis/${symbol}?${q({ mode, timeframe })}`),
+  levels: (symbol: string, mode: Mode, timeframe: string) =>
+    request<KeyLevelReport>(`/api/levels/${symbol}?${q({ mode, timeframe })}`),
   ai: (symbol: string, mode: Mode, timeframe: string, refresh = false) =>
     request<AIResult>(`/api/ai/${symbol}?${q({ mode, timeframe, refresh })}`, { method: "POST" }),
   scan: () => request<{ scanned_at: number; new_alerts: Alert[] }>("/api/scan", { method: "POST" }),

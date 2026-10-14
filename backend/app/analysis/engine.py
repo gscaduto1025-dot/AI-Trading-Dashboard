@@ -26,7 +26,7 @@ _STATUS_RANK = {ACTIONABLE: 2, FORMING: 1, NO_TRADE: 0}
 
 MODE_PARAMS = {
     # fast/slow EMA, long-term average, min reward/risk, max extension (ATR) past entry
-    "day": {"fast": 9, "slow": 21, "long": None, "min_rr": 1.5, "max_ext": 0.75},
+    "day": {"fast": 9, "slow": 20, "long": None, "min_rr": 1.5, "max_ext": 0.75},
     "swing": {"fast": 20, "slow": 50, "long": 200, "min_rr": 2.0, "max_ext": 1.0},
 }
 
@@ -464,7 +464,10 @@ def no_trade(ctx: Context, levels: list[Level], extra: list[str] | None = None) 
                       reasons=reasons or ["No setup conditions are present."])
 
 
-def analyze(symbol: str, bars: list[Bar], mode: str, timeframe: str) -> dict:
+def analyze(symbol: str, bars: list[Bar], mode: str, timeframe: str,
+            extra_levels: list[Level] | None = None) -> dict:
+    """Run the setup engine. `extra_levels` (e.g. multi-timeframe key levels) are used
+    alongside the chart timeframe's own levels for breakout, pullback and target logic."""
     if mode not in MODE_PARAMS:
         raise ValueError(f"Unknown mode {mode!r}")
     if len(bars) < 60:
@@ -475,6 +478,8 @@ def analyze(symbol: str, bars: list[Bar], mode: str, timeframe: str) -> dict:
     atr_value = ind.last(atr_series) or closes[-1] * 0.01
     bar_minutes = TIMEFRAMES[timeframe]
     all_levels = compute_levels(bars, atr_value, mode, bar_minutes, max_per_side=None)
+    if extra_levels:
+        all_levels = all_levels + list(extra_levels)
     key_levels = compute_levels(bars, atr_value, mode, bar_minutes, max_per_side=4)
     bias = market_bias(bars, mode, bar_minutes)
     ctx = build_context(bars, mode, bar_minutes, bias, all_levels)

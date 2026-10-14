@@ -139,14 +139,9 @@ export default function SetupPanel({
 
         <p className="text-[10px] leading-relaxed text-faint">
           Analysed {analysis.data_status.source === "demo" ? "demo" : analysis.data_status.feed_label} candles through{" "}
-          {new Date(analysis.analyzed_through * 1000).toLocaleString("en-US", {
-            timeZone: "America/New_York",
-            month: "short",
-            day: "numeric",
-            hour: "numeric",
-            minute: "2-digit",
-          })}{" "}
-          ET{analysis.excluded_forming_candle ? " · forming candle excluded (close confirmation)" : ""}.
+          {analysis.timeframe === "1Day" || analysis.timeframe === "1Week"
+            ? new Date(analysis.analyzed_through * 1000).toLocaleDateString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", year: "numeric" })
+            : `${new Date(analysis.analyzed_through * 1000).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} ET`}{analysis.excluded_forming_candle ? " · forming candle excluded (close confirmation)" : ""}.
         </p>
 
         {s.checklist.length > 0 && (

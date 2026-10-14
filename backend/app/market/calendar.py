@@ -28,6 +28,8 @@ EARLY_AFTER_HOURS_CLOSE = time(17, 0)
 
 # Unscheduled full-day closures that rules cannot predict.
 SPECIAL_CLOSURES: dict[date, str] = {
+    date(2004, 6, 11): "National Day of Mourning (Ronald Reagan)",
+    date(2007, 1, 2): "National Day of Mourning (Gerald Ford)",
     date(2012, 10, 29): "Hurricane Sandy",
     date(2012, 10, 30): "Hurricane Sandy",
     date(2018, 12, 5): "National Day of Mourning (George H. W. Bush)",

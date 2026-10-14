@@ -242,3 +242,61 @@ export interface Alert {
   created_at: number;
   acknowledged: boolean;
 }
+
+export type LevelCategory = "reference" | "zone" | "swing" | "indicator" | "liquidity" | "breakout";
+
+/** One automatically detected technical level (see backend app/levels). */
+export interface KeyLevel {
+  id: string;
+  ticker: string;
+  type: string;
+  label: string;
+  category: LevelCategory;
+  timeframe: string;
+  timeframes: string[];
+  price: number;
+  low: number;
+  high: number;
+  is_zone: boolean;
+  side: "support" | "resistance" | "at price";
+  calculated_at: string;
+  formed_at: string;
+  valid: boolean;
+  status: string;
+  evidence: { summary: string; details: Record<string, unknown>; events: { time: number; price: number; kind: string; timeframe: string }[] };
+  strength: {
+    score: number;
+    label: "weak" | "moderate" | "strong";
+    components: { reactions: number; recency: number; timeframe: number; confluence: number };
+    inputs: { reactions: number; days_since_last_reaction: number; highest_timeframe: string; overlapping_levels: string[] };
+    note: string;
+  };
+}
+
+export interface KeyLevelReport {
+  ticker: string;
+  mode: Mode;
+  method_version: string;
+  calculated_at: string;
+  current_session: string;
+  previous_session: string;
+  last_price: number;
+  timeframes_used: Record<string, { candles: number; from: string | null; to: string | null; label: string }>;
+  atr: Record<string, number>;
+  adjustment: string | null;
+  splits_detected: { date: string; ratio: string }[];
+  warnings: string[];
+  notes: string[];
+  strength_note: string;
+  levels: KeyLevel[];
+  indicators?: {
+    ema9: LinePoint[];
+    ema20: LinePoint[];
+    ema50: LinePoint[];
+    ema200: LinePoint[];
+    vwap?: LinePoint[];
+    swings: { time: number; price: number; kind: "high" | "low" }[];
+  };
+  is_demo: boolean;
+  replay: boolean;
+}

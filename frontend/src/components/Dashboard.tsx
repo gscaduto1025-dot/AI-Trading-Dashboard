@@ -10,6 +10,7 @@ import type {
   CandleResponse,
   FeedInfo,
   Health,
+  KeyLevelReport,
   MarketStatus,
   Mode,
   Quote,
@@ -75,6 +76,8 @@ export default function Dashboard() {
   const [candles, setCandles] = useState<CandleResponse | null>(null);
   const [candlesError, setCandlesError] = useState<ApiError | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
+  const [keyLevels, setKeyLevels] = useState<KeyLevelReport | null>(null);
+  const [levelsError, setLevelsError] = useState<string | null>(null);
   const [blocked, setBlocked] = useState<{ title: string; message: string } | null>(null);
   // Key of the view whose data is currently shown; loading while it lags behind.
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
@@ -86,11 +89,17 @@ export default function Dashboard() {
   const [scanning, setScanning] = useState(false);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
-    emaFast: true,
-    emaSlow: true,
+    zones: true,
+    liquidity: true,
+    prevHighLow: true,
+    session: true,
     vwap: true,
-    smaLong: true,
-    levels: true,
+    ema9: true,
+    ema20: true,
+    ema50: false,
+    ema200: true,
+    swings: true,
+    breakouts: true,
     plan: true,
     volume: true,
   });
@@ -151,8 +160,12 @@ export default function Dashboard() {
   const loadChart = useCallback(() => {
     const id = ++requestId.current;
     const key = viewKey;
-    Promise.allSettled([api.bars(symbol, timeframe, effectiveSession), api.analysis(symbol, mode, timeframe)])
-      .then(([b, a]) => {
+    Promise.allSettled([
+      api.bars(symbol, timeframe, effectiveSession),
+      api.analysis(symbol, mode, timeframe),
+      api.levels(symbol, mode, timeframe),
+    ])
+      .then(([b, a, k]) => {
         if (id !== requestId.current) return; // a newer request superseded this one
         if (b.status === "fulfilled") {
           setCandles(b.value);
@@ -162,6 +175,13 @@ export default function Dashboard() {
           setCandlesError(
             b.reason instanceof ApiError ? b.reason : new ApiError(errorText(b.reason), 0, "ERROR", UNAVAILABLE),
           );
+        }
+        if (k.status === "fulfilled") {
+          setKeyLevels(k.value);
+          setLevelsError(null);
+        } else {
+          setKeyLevels(null);
+          setLevelsError(errorText(k.reason));
         }
         if (a.status === "fulfilled") {
           setAnalysis(a.value);
@@ -265,15 +285,23 @@ export default function Dashboard() {
   const ind = analysis?.indicators;
   const stale = candles?.status.freshness === "stale";
   const dataDown = Boolean(quotesError) || Boolean(candlesError && candlesError.code !== "INVALID_REQUEST");
+  const hasVwap = Boolean(keyLevels?.indicators?.vwap?.length);
   const toggleList: [keyof ChartToggles, string, string, boolean][] = [
-    ["emaFast", `EMA ${ind?.ema_fast_period ?? (mode === "day" ? 9 : 20)}`, "bg-[#4f9cf9]", true],
-    ["emaSlow", `EMA ${ind?.ema_slow_period ?? (mode === "day" ? 21 : 50)}`, "bg-[#c084fc]", true],
-    ["vwap", "VWAP", "bg-[#f5b942]", Boolean(analysis?.overlays.vwap)],
-    ["smaLong", "SMA 200", "bg-[#94a3b8]", Boolean(analysis?.overlays.sma200)],
-    ["levels", "S/R levels", "bg-bull", true],
+    ["zones", "S/R zones", "bg-gradient-to-b from-bear/70 to-bull/70", true],
+    ["prevHighLow", "PDH/PDL · PWH/PWL", "bg-[#22d3ee]", true],
+    ["session", "Open · OR", "bg-[#cbd5e1]", mode === "day"],
+    ["vwap", "VWAP", "bg-[#f5b942]", hasVwap],
+    ["ema9", "EMA 9", "bg-[#4f9cf9]", true],
+    ["ema20", "EMA 20", "bg-[#c084fc]", true],
+    ["ema50", "EMA 50", "bg-[#2dd4bf]", true],
+    ["ema200", "EMA 200", "bg-[#f1f5f9]", true],
+    ["swings", "Swings", "bg-[#94a3b8]", true],
+    ["liquidity", "Liquidity", "bg-[#c084fc]/60", true],
+    ["breakouts", "Breakouts", "bg-bull", true],
     ["plan", "Trade plan", "bg-accent", true],
     ["volume", "Volume", "bg-muted", true],
   ];
+
 
   return (
     <div className="flex min-h-screen flex-col">
@@ -458,6 +486,7 @@ export default function Dashboard() {
               <PriceChart
                 bars={candles?.bars ?? []}
                 analysis={analysis}
+                keyLevels={keyLevels}
                 toggles={toggles}
                 isDemo={isDemo}
                 lastComplete={candles?.last_bar_complete ?? true}
@@ -496,7 +525,7 @@ export default function Dashboard() {
           <BiasPanel analysis={analysis} />
         </div>
         <div className="max-h-[420px] md:h-[340px] md:max-h-none">
-          <LevelsPanel analysis={analysis} />
+          <LevelsPanel report={keyLevels} error={loading ? null : levelsError} />
         </div>
         <div className="max-h-[520px] md:col-span-2 md:h-[420px] md:max-h-none xl:col-span-1 xl:h-[340px]">
           <AIPanel

@@ -18,6 +18,7 @@ from fastapi.responses import Response
 
 from .ai.claude import AIUnavailable, ClaudeAnalyst
 from .analysis.engine import analyze
+from .analysis.levels import Level as EngineLevel
 from .config import Settings, load_settings
 from .data.base import (DEFAULT_TIMEFRAME, MODE_TIMEFRAMES, TIMEFRAMES, DataError,
                         InvalidRequest)
@@ -27,7 +28,9 @@ from .market.alpaca_client import AlpacaClient, RateLimiter
 from .market.calendar import NY
 from .market.service import CandleSet, MarketDataService
 from .market.sources import AlpacaSource
-from .market.timeframes import SPECS
+from .levels.engine import InsufficientData, compute_key_levels
+from .levels.model import FETCH_LIMIT, MODE_FRAMES
+from .market.timeframes import SPECS, lookback_start, spec
 
 log = logging.getLogger("tradescope")
 
@@ -74,15 +77,88 @@ class Service:
             raise AnalysisBlocked(*block, candles.status)
         return candles
 
+    def key_levels(self, symbol: str, mode: str, chart_tf: str | None = None,
+                   as_of: datetime | None = None) -> dict:
+        """Multi-timeframe key levels, point-in-time at `as_of` (default: the feed's cutoff).
+
+        Live: uses the cached candle sets and refuses stale/invalid/unavailable frames.
+        Replay (`as_of` given): fetches history ending at `as_of`; the engine then drops any
+        candle that had not closed by then, so the output contains no look-ahead.
+        """
+        if mode not in MODE_FRAMES:
+            raise InvalidRequest(f"mode must be one of {list(MODE_FRAMES)}")
+        market = self.market
+        symbol = market.check_symbol(symbol)
+        frames: dict = {}
+        chart_bars = None
+        statuses = {}
+        if as_of is None:
+            for tf in MODE_FRAMES[mode]:
+                candles = market.get_candles(symbol, tf, "regular", FETCH_LIMIT[tf])
+                block = candles.analysis_block()
+                if block and block[0] != "INSUFFICIENT_DATA":
+                    raise AnalysisBlocked(block[0], f"{SPECS[tf].label} data: {block[1]}",
+                                          candles.status)
+                frames[tf] = candles.completed_bars
+                statuses[tf] = candles.status
+            if chart_tf:
+                chart_bars = market.get_candles(symbol, chart_tf, "regular", 300).completed_bars
+            when = market.cutoff()
+        else:
+            when = min(as_of, market.cutoff())
+            cal = market.calendar
+            for tf in set(MODE_FRAMES[mode]) | ({chart_tf} if chart_tf else set()):
+                start = lookback_start(spec(tf), cal, when, FETCH_LIMIT.get(tf, 300), "regular")
+                frames[tf] = market.get_history(symbol, tf, start, when).bars
+            chart_bars = frames.get(chart_tf) if chart_tf else None
+            frames = {tf: frames[tf] for tf in MODE_FRAMES[mode]}
+        report = compute_key_levels(symbol, mode, frames, when, market.calendar, chart_tf,
+                                    chart_bars, adjustment=market.feed_info().get("adjustment"))
+        report["is_demo"] = self.is_demo
+        report["feed"] = market.feed_info()
+        report["replay"] = as_of is not None
+        return report
+
+    @staticmethod
+    def engine_levels(report: dict) -> list[EngineLevel]:
+        """Valid horizontal key levels as setup-engine levels (zones by their near edge)."""
+        price = report["last_price"]
+        out = []
+        for lv in report["levels"]:
+            if not lv["valid"] or lv["category"] not in ("reference", "zone", "swing"):
+                continue
+            if lv["is_zone"]:
+                if lv["low"] <= price <= lv["high"]:
+                    continue
+                value = lv["low"] if lv["low"] > price else lv["high"]
+            else:
+                value = lv["price"]
+            out.append(EngineLevel(value, "", f"{lv['label']}", touches=1,
+                                   strength=lv["strength"]["score"] / 100))
+        return out
+
     def analysis(self, symbol: str, mode: str, timeframe: str) -> dict:
         candles = self.candles_for_analysis(symbol, timeframe)
         # Strategies confirm on candle closes, so only completed candles are analysed.
         bars = candles.completed_bars
-        result = analyze(candles.symbol, bars, mode, timeframe)
+        extra, summary, levels_error = [], [], None
+        try:
+            report = self.key_levels(symbol, mode)
+            extra = self.engine_levels(report)
+            ranked = sorted((l for l in report["levels"] if l["valid"]),
+                            key=lambda l: -l["strength"]["score"])[:12]
+            summary = [{k: l[k] for k in ("label", "type", "timeframe", "low", "high", "side")}
+                       | {"strength": l["strength"]["score"], "evidence": l["evidence"]["summary"]}
+                       for l in ranked]
+        except (AnalysisBlocked, DataError, InsufficientData) as exc:
+            levels_error = getattr(exc, "message", str(exc))
+        result = analyze(candles.symbol, bars, mode, timeframe, extra_levels=extra)
         result["is_demo"] = self.is_demo
         result["data_status"] = candles.status
         result["analyzed_through"] = bars[-1].time
         result["excluded_forming_candle"] = len(bars) < len(candles.bars)
+        result["key_levels"] = summary
+        result["key_levels_error"] = levels_error
         return result
 
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
@@ -265,6 +341,23 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             raise _data_error(exc) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+
+    @app.get("/api/levels/{symbol}")
+    def key_levels(symbol: str, mode: str = "day", timeframe: str | None = None,
+                   as_of: str | None = None) -> dict:
+        """Automatic key levels (multi-timeframe). `as_of` replays a past moment."""
+        if timeframe is not None and timeframe not in TIMEFRAMES:
+            raise HTTPException(400, f"timeframe must be one of {list(TIMEFRAMES)}")
+        when = _parse_dt(as_of) if as_of else None
+        try:
+            return svc().key_levels(symbol, mode, timeframe, when)
+        except AnalysisBlocked as exc:
+            raise _blocked(exc) from exc
+        except DataError as exc:
+            raise _data_error(exc) from exc
+        except InsufficientData as exc:
+            raise HTTPException(503, {"code": "INSUFFICIENT_DATA", "message": str(exc),
+                                      "display": "ANALYSIS PAUSED"}) from exc
 
     @app.post("/api/ai/{symbol}")
     def ai_analysis(symbol: str, mode: str = "day", timeframe: str | None = None,

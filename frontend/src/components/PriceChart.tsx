@@ -9,41 +9,114 @@ import {
   LineStyle,
   TickMarkType,
   createChart,
+  createSeriesMarkers,
   type IChartApi,
   type IPriceLine,
   type ISeriesApi,
+  type ISeriesMarkersPluginApi,
+  type SeriesMarker,
+  type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
-import type { Analysis, Bar } from "@/lib/types";
+import type { Analysis, Bar, KeyLevel, KeyLevelReport } from "@/lib/types";
+import { type Band, ZoneBands } from "./chartPrimitives";
 
 export interface ChartToggles {
-  emaFast: boolean;
-  emaSlow: boolean;
+  zones: boolean;
+  liquidity: boolean;
+  prevHighLow: boolean;
+  session: boolean;
   vwap: boolean;
-  smaLong: boolean;
-  levels: boolean;
+  ema9: boolean;
+  ema20: boolean;
+  ema50: boolean;
+  ema200: boolean;
+  swings: boolean;
+  breakouts: boolean;
   plan: boolean;
   volume: boolean;
 }
 
+/** One visual language per level family (also used by the legend chips). */
+export const LEVEL_STYLE = {
+  support: { fill: "rgba(34,197,94,0.10)", strong: "rgba(34,197,94,0.17)", border: "rgba(34,197,94,0.55)" },
+  resistance: { fill: "rgba(239,68,68,0.10)", strong: "rgba(239,68,68,0.17)", border: "rgba(239,68,68,0.55)" },
+  liquidity: { fill: "rgba(192,132,252,0.10)", border: "rgba(192,132,252,0.7)" },
+  pd: "#22d3ee", // previous day high/low
+  pw: "#fb923c", // previous week high/low
+  session: "#cbd5e1", // session open + opening range
+  vwap: "#f5b942",
+  ema9: "#4f9cf9",
+  ema20: "#c084fc",
+  ema50: "#2dd4bf",
+  ema200: "#f1f5f9",
+  breakout: "#22c55e",
+  breakdown: "#ef4444",
+  swing: "#94a3b8",
+};
+
 const COLORS = {
   bull: "#22c55e",
   bear: "#ef4444",
-  emaFast: "#4f9cf9",
-  emaSlow: "#c084fc",
-  vwap: "#f5b942",
-  sma: "#94a3b8",
   grid: "#121a24",
   text: "#8494a7",
   border: "#1c2633",
 };
 
 const ts = (t: number) => t as UTCTimestamp;
+type LineKey = "ema9" | "ema20" | "ema50" | "ema200" | "vwap";
+
+const MAX_ZONES_PER_SIDE = 3;
+const MIN_ZONE_SCORE = 35;
+const MAX_SWING_MARKERS = 12;
+
+/** Nearest qualifying zones each side of price (the panel lists everything). */
+function nearest(levels: KeyLevel[], price: number, perSide: number): KeyLevel[] {
+  const above = levels.filter((l) => l.low > price).sort((a, b) => a.low - b.low);
+  const below = levels.filter((l) => l.high < price).sort((a, b) => b.high - a.high);
+  const inside = levels.filter((l) => l.low <= price && l.high >= price);
+  return [...inside, ...above.slice(0, perSide), ...below.slice(0, perSide)];
+}
+
+function zoneBands(report: KeyLevelReport, toggles: ChartToggles): Band[] {
+  const bands: Band[] = [];
+  const price = report.last_price;
+  if (toggles.zones) {
+    const zones = report.levels.filter((l) => l.valid && l.category === "zone" && l.strength.score >= MIN_ZONE_SCORE);
+    for (const l of nearest(zones, price, MAX_ZONES_PER_SIDE)) {
+      const sty = l.type === "SUPPORT_ZONE" ? LEVEL_STYLE.support : LEVEL_STYLE.resistance;
+      const htf = l.timeframes.includes("1Week") || l.timeframes.includes("1Day");
+      const tf = l.timeframes.includes("1Week") ? "W" : l.timeframes.includes("1Day") ? "D" : l.timeframe.replace("Hour", "H");
+      bands.push({
+        low: l.low,
+        high: l.high,
+        fill: htf ? sty.strong : sty.fill,
+        border: sty.border,
+        label: `${tf} ${l.type === "SUPPORT_ZONE" ? "support" : "resistance"} · ${l.strength.score}`,
+      });
+    }
+  }
+  if (toggles.liquidity) {
+    const pools = report.levels.filter((l) => l.valid && l.category === "liquidity");
+    for (const l of nearest(pools, price, 1)) {
+      bands.push({
+        low: l.low,
+        high: l.high,
+        fill: LEVEL_STYLE.liquidity.fill,
+        border: LEVEL_STYLE.liquidity.border,
+        dashed: true,
+        label: l.label.startsWith("Buy") ? "BSL (potential)" : "SSL (potential)",
+      });
+    }
+  }
+  return bands;
+}
 
 export default function PriceChart({
   bars,
   analysis,
+  keyLevels,
   toggles,
   isDemo,
   lastComplete,
@@ -51,6 +124,7 @@ export default function PriceChart({
 }: {
   bars: Bar[];
   analysis: Analysis | null;
+  keyLevels: KeyLevelReport | null;
   toggles: ChartToggles;
   isDemo: boolean;
   /** False when the newest candle is still forming; it is drawn translucent. */
@@ -64,6 +138,8 @@ export default function PriceChart({
   const volumeRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   const linesRef = useRef<Record<string, ISeriesApi<"Line">>>({});
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const bandsRef = useRef<ZoneBands | null>(null);
+  const markersRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
 
   // Create the chart once.
   useEffect(() => {
@@ -108,7 +184,7 @@ export default function PriceChart({
           }),
       },
     });
-    candlesRef.current = chart.addSeries(CandlestickSeries, {
+    const candles = chart.addSeries(CandlestickSeries, {
       upColor: COLORS.bull,
       downColor: COLORS.bear,
       borderUpColor: COLORS.bull,
@@ -116,6 +192,7 @@ export default function PriceChart({
       wickUpColor: COLORS.bull,
       wickDownColor: COLORS.bear,
     });
+    candlesRef.current = candles;
     volumeRef.current = chart.addSeries(HistogramSeries, {
       priceScaleId: "volume",
       priceFormat: { type: "volume" },
@@ -123,12 +200,18 @@ export default function PriceChart({
       priceLineVisible: false,
     });
     chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    const bands = new ZoneBands();
+    candles.attachPrimitive(bands);
+    bandsRef.current = bands;
+    markersRef.current = createSeriesMarkers(candles, []);
     chartRef.current = chart;
     return () => {
       chart.remove();
       chartRef.current = null;
       candlesRef.current = null;
       volumeRef.current = null;
+      bandsRef.current = null;
+      markersRef.current = null;
       linesRef.current = {};
       priceLinesRef.current = [];
     };
@@ -169,33 +252,33 @@ export default function PriceChart({
     }
   }, [bars, viewKey]);
 
-  // Indicator overlays.
+  // EMA 9/20/50/200 and session VWAP lines from the key-level engine.
   useEffect(() => {
     const chart = chartRef.current;
     if (!chart) return;
-    const wanted: Record<string, { color: string; on: boolean; style?: LineStyle }> = {};
-    if (analysis) {
-      const { ema_fast_period: f, ema_slow_period: s } = analysis.indicators;
-      wanted[`ema${f}`] = { color: COLORS.emaFast, on: toggles.emaFast };
-      wanted[`ema${s}`] = { color: COLORS.emaSlow, on: toggles.emaSlow };
-      wanted.vwap = { color: COLORS.vwap, on: toggles.vwap, style: LineStyle.Dashed };
-      wanted.sma200 = { color: COLORS.sma, on: toggles.smaLong };
-    }
+    const ind = keyLevels?.indicators;
+    const wanted: Record<string, { color: string; on: boolean; style?: LineStyle; width?: 1 | 2 | 3 }> = {
+      ema9: { color: LEVEL_STYLE.ema9, on: toggles.ema9, width: 1 },
+      ema20: { color: LEVEL_STYLE.ema20, on: toggles.ema20, width: 1 },
+      ema50: { color: LEVEL_STYLE.ema50, on: toggles.ema50, width: 2 },
+      ema200: { color: LEVEL_STYLE.ema200, on: toggles.ema200, width: 2 },
+      vwap: { color: LEVEL_STYLE.vwap, on: toggles.vwap, style: LineStyle.Dashed, width: 2 },
+    };
     for (const [key, series] of Object.entries(linesRef.current)) {
-      if (!wanted[key]?.on || !analysis?.overlays[key]) {
+      if (!wanted[key]?.on || !ind?.[key as keyof typeof ind]) {
         chart.removeSeries(series);
         delete linesRef.current[key];
       }
     }
-    if (!analysis) return;
+    if (!ind) return;
     for (const [key, cfg] of Object.entries(wanted)) {
-      const data = analysis.overlays[key];
-      if (!cfg.on || !data) continue;
+      const data = ind[key as LineKey];
+      if (!cfg.on || !data?.length) continue;
       let series = linesRef.current[key];
       if (!series) {
         series = chart.addSeries(LineSeries, {
           color: cfg.color,
-          lineWidth: 2,
+          lineWidth: cfg.width ?? 1,
           lineStyle: cfg.style ?? LineStyle.Solid,
           priceLineVisible: false,
           lastValueVisible: false,
@@ -205,15 +288,56 @@ export default function PriceChart({
       }
       series.setData(data.map((p) => ({ time: ts(p.time), value: p.value })));
     }
-  }, [analysis, toggles.emaFast, toggles.emaSlow, toggles.vwap, toggles.smaLong]);
+  }, [keyLevels, toggles.ema9, toggles.ema20, toggles.ema50, toggles.ema200, toggles.vwap]);
 
-  // Price lines: key levels and the trade plan.
+  // Zones and liquidity as shaded bands.
+  useEffect(() => {
+    bandsRef.current?.setBands(keyLevels ? zoneBands(keyLevels, toggles) : []);
+  }, [keyLevels, toggles]);
+
+  // Swing markers and breakout markers.
+  useEffect(() => {
+    const plugin = markersRef.current;
+    if (!plugin) return;
+    const times = new Set(bars.map((b) => b.time));
+    const markers: SeriesMarker<Time>[] = [];
+    if (keyLevels?.indicators && toggles.swings) {
+      for (const s of keyLevels.indicators.swings.slice(-MAX_SWING_MARKERS)) {
+        if (!times.has(s.time)) continue;
+        markers.push({
+          time: ts(s.time),
+          position: s.kind === "high" ? "aboveBar" : "belowBar",
+          shape: "circle",
+          color: LEVEL_STYLE.swing,
+          size: 0.4,
+        });
+      }
+    }
+    if (keyLevels && toggles.breakouts) {
+      for (const l of keyLevels.levels) {
+        if (l.category !== "breakout") continue;
+        const t = (l.evidence.details as { breakout_candle?: number }).breakout_candle;
+        if (!t || !times.has(t)) continue;
+        const up = l.type === "BREAKOUT";
+        markers.push({
+          time: ts(t),
+          position: up ? "belowBar" : "aboveBar",
+          shape: up ? "arrowUp" : "arrowDown",
+          color: l.valid ? (up ? LEVEL_STYLE.breakout : LEVEL_STYLE.breakdown) : LEVEL_STYLE.swing,
+          text: `${up ? "BO" : "BD"}${l.valid ? "" : "✕"}`,
+        });
+      }
+    }
+    markers.sort((a, b) => (a.time as number) - (b.time as number));
+    plugin.setMarkers(markers);
+  }, [bars, keyLevels, toggles.swings, toggles.breakouts]);
+
+  // Price lines: previous highs/lows, session levels, breakout levels, trade plan.
   useEffect(() => {
     const candles = candlesRef.current;
     if (!candles) return;
     priceLinesRef.current.forEach((l) => candles.removePriceLine(l));
     priceLinesRef.current = [];
-    if (!analysis) return;
     const add = (price: number, color: string, title: string, style = LineStyle.Dotted, width = 1) =>
       priceLinesRef.current.push(
         candles.createPriceLine({
@@ -225,22 +349,21 @@ export default function PriceChart({
           axisLabelVisible: true,
         }),
       );
-    if (toggles.levels) {
-      for (const lvl of analysis.levels) {
-        add(
-          lvl.price,
-          lvl.kind === "support" ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)",
-          lvl.source === "Swing pivot" ? (lvl.kind === "support" ? "S" : "R") : lvl.source,
-        );
-      }
+    for (const l of keyLevels?.levels ?? []) {
+      if ((l.type === "PDH" || l.type === "PDL") && toggles.prevHighLow) add(l.price, LEVEL_STYLE.pd, l.type, LineStyle.Dotted, 1);
+      if ((l.type === "PWH" || l.type === "PWL") && toggles.prevHighLow) add(l.price, LEVEL_STYLE.pw, l.type, LineStyle.Dashed, 2);
+      if (l.type === "SESSION_OPEN" && toggles.session) add(l.price, LEVEL_STYLE.session, "Open", LineStyle.SparseDotted, 1);
+      if ((l.type === "ORH" || l.type === "ORL") && toggles.session) add(l.price, LEVEL_STYLE.session, l.type, LineStyle.Dashed, 1);
+      if (l.category === "breakout" && l.valid && toggles.breakouts)
+        add(l.price, l.type === "BREAKOUT" ? LEVEL_STYLE.breakout : LEVEL_STYLE.breakdown, l.type === "BREAKOUT" ? "BO" : "BD", LineStyle.Solid, 2);
     }
-    const s = analysis.setup;
-    if (toggles.plan && s.status !== "NO_TRADE" && s.entry !== null && s.stop !== null) {
+    const s = analysis?.setup;
+    if (s && toggles.plan && s.status !== "NO_TRADE" && s.entry !== null && s.stop !== null) {
       add(s.entry, "#4f9cf9", "Entry", LineStyle.Solid, 2);
       add(s.stop, COLORS.bear, "Stop", LineStyle.Solid, 2);
-      s.targets.forEach((t, i) => add(t, COLORS.bull, `T${i + 1}`, LineStyle.Dashed, 2));
+      s.targets.forEach((t, i) => add(t, COLORS.bull, `T${i + 1}`, LineStyle.LargeDashed, 2));
     }
-  }, [analysis, toggles.levels, toggles.plan]);
+  }, [analysis, keyLevels, toggles.prevHighLow, toggles.session, toggles.breakouts, toggles.plan]);
 
   return (
     <div className="relative h-full w-full">
