@@ -94,10 +94,11 @@ class OpeningRangeBreakout(Strategy):
             down = b.close < orl - cfg.breakout_buffer_atr * atr
             if not (up or down):
                 continue
-            rv = tfd.relvol[i]
-            if tfd.volume_available and rv is not None and rv < cfg.min_rel_volume:
-                weak.append(f"{fmt(b.time)} close beyond the range on relative volume {rv:.2f} "
-                            f"< {cfg.min_rel_volume} (not a confirmed breakout)")
+            vol = tfd.volume(i)
+            if vol.rejects(cfg.min_rel_volume):
+                weak.append(f"{fmt(b.time)} close beyond the range on relative volume "
+                            f"{vol.rv:.2f} < {cfg.min_rel_volume} ({vol.level}, {vol.source}; "
+                            f"not a confirmed breakout)")
                 continue
             first_dir, first_i = (LONG if up else "SHORT"), i
             break
@@ -133,7 +134,7 @@ class OpeningRangeBreakout(Strategy):
         atr = tfd.atr_before(i)
         extra = [(b.close + s * m * width, f"{m:g}x opening-range measured move")
                  for m in cfg.measured_move_multiples]
-        rv = tfd.relvol[i]
+        vol = tfd.volume(i)
         conds = [
             Condition(f"{R}-minute opening range complete", True, True,
                       f"ORH {orh:.2f} / ORL {orl:.2f} ({ratio:.2f} daily ATR)"),
@@ -141,10 +142,8 @@ class OpeningRangeBreakout(Strategy):
                       f"{fmt(b.time)} close {b.close:.2f} vs {edge:.2f} + "
                       f"{cfg.breakout_buffer_atr} ATR", b.time),
             Condition(f"Relative volume >= {cfg.min_rel_volume}",
-                      None if not tfd.volume_available or rv is None else rv >= cfg.min_rel_volume,
-                      True, "volume unavailable on this feed"
-                      if not tfd.volume_available or rv is None
-                      else f"{rv:.2f}x same time of day", b.time),
+                      vol.passed(cfg.min_rel_volume), True, vol.detail("same time of day"),
+                      b.time, vol.level),
             Condition(f"Breakout before {cfg.latest_breakout_time} ET", True, True, fmt(b.time)),
         ]
         retest = next((bars[j] for j in range(i + 1, len(bars))

@@ -25,6 +25,8 @@ from ..market.calendar import NY, MarketCalendar, SessionDay
 from ..market.timeframes import bar_end, spec
 from ..planning.config import PlanningConfig
 from .config import StrategyConfig
+from .volume import (VolumeReading, VolumeSource, masked_overlay, read_volume,
+                     volume_confirmation)
 
 WATCHING, TRIGGERED, NO_TRADE = "WATCHING", "TRIGGERED", "NO_TRADE"
 LONG, SHORT = "LONG", "SHORT"
@@ -50,10 +52,11 @@ def signal_id(ticker: str, strategy: str, timeframe: str, direction: str, sessio
 @dataclass
 class Condition:
     name: str
-    passed: bool | None  # None = not applicable (e.g. no volume on this feed)
+    passed: bool | None  # None = not applicable / not confirmable (e.g. volume unverified)
     required: bool = True
     detail: str = ""
     at: int | None = None  # candle start time the condition was evaluated on
+    verification: str | None = None  # volume conditions: FULL|LIMITED|UNVERIFIED|UNAVAILABLE
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -127,6 +130,7 @@ class Setup:
         if d["risk_reward"] is not None:
             d["risk_reward"] = round(d["risk_reward"], 2)
         d["trigger_time_et"] = fmt_full(self.trigger_time) if self.trigger_time else None
+        d["volume_confirmation"] = volume_confirmation(d["confirmation"])
         return d
 
 
@@ -142,10 +146,17 @@ class TFData:
     ema9: list[float | None]
     ema20: list[float | None]
     vwap: list[float | None]
-    relvol: list[float | None]
+    relvol: list[float | None]  # from the feed's own volume (a proxy on IEX)
     abnormal: list[str | None]
     missing_slots: int
     volume_available: bool
+    relvol_full: list[float | None] = field(default_factory=list)  # consolidated, if covered
+    volume_src: VolumeSource = field(default_factory=VolumeSource)
+
+    def volume(self, i: int) -> VolumeReading:
+        """Relative volume of candle i with its verification level (see volume.py)."""
+        full = self.relvol_full[i] if i < len(self.relvol_full) else None
+        return read_volume(self.relvol[i], full, self.volume_available, self.volume_src)
 
     @property
     def session(self) -> range:
@@ -259,7 +270,7 @@ def _relvol_time_of_day(bars: list[Bar], sessions: int = 5) -> list[float | None
 
 
 def build_tf(tf: str, bars: list[Bar], session: SessionDay, cal: MarketCalendar,
-             as_of_ts: int, cfg: StrategyConfig) -> TFData:
+             as_of_ts: int, cfg: StrategyConfig, vsrc: VolumeSource | None = None) -> TFData:
     s = spec(tf)
     bars = [b for b in sorted(bars, key=lambda b: b.time)
             if bar_end(b, s, cal, "regular") <= as_of_ts]
@@ -289,16 +300,29 @@ def build_tf(tf: str, bars: list[Bar], session: SessionDay, cal: MarketCalendar,
                            f"{prev_atr:.2f}")
         expected_next = b.time + step
     sess_vol = [bars[i].volume for i in range(start, len(bars))]
+    vsrc = vsrc or VolumeSource()
+    sub, covered = masked_overlay(bars, end, vsrc.overlay(tf))
+    full: list[float | None] = []
+    if sub is not None:
+        full = [rv if c else None for rv, c in zip(_relvol_time_of_day(sub), covered)]
     return TFData(tf, bars, end, start, atr, ind.ema(closes, 9), ind.ema(closes, 20), vwap,
                   _relvol_time_of_day(bars), abnormal, missing,
-                  volume_available=bool(sess_vol) and any(v > 0 for v in sess_vol))
+                  volume_available=bool(sess_vol) and any(v > 0 for v in sess_vol),
+                  relvol_full=full, volume_src=vsrc)
+
+
+def _liq_basis(liq: dict) -> str:
+    rng = (f", sessions {liq['first_session']} to {liq['last_session']}"
+           if liq.get("first_session") else "")
+    return f"on {liq['basis']}{rng}"
 
 
 def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                   cal: MarketCalendar, cfg: StrategyConfig,
                   data_problems: list[str] | None = None,
                   planning: PlanningConfig | None = None,
-                  liquidity: dict | None = None) -> StrategyContext:
+                  liquidity: dict | None = None,
+                  volume: VolumeSource | None = None) -> StrategyContext:
     as_ts = int(as_of.timestamp())
     session = cal.last_session_started(as_of, "regular")
     session_open = as_of < session.close
@@ -308,7 +332,7 @@ def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
     hourly = [b for b in sorted(frames.get("1Hour", []), key=lambda b: b.time)
               if bar_end(b, hourly_spec, cal, "regular") <= as_ts]
     hourly_end = [bar_end(b, hourly_spec, cal, "regular") for b in hourly]
-    tfs = {tf: build_tf(tf, frames.get(tf, []), session, cal, as_ts, cfg)
+    tfs = {tf: build_tf(tf, frames.get(tf, []), session, cal, as_ts, cfg, volume)
            for tf in ("5Min", "15Min") if frames.get(tf)}
 
     daily_atr = ind.last(ind.atr(daily)) if len(daily) > 15 else None
@@ -336,7 +360,7 @@ def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
         adv = sum(b.close * b.volume for b in recent) / len(recent)
         basis = "on this feed"
         if liquidity is not None:  # IEX volume is a small share of the market: use SIP
-            adv, basis = liquidity["adv"], f"on {liquidity['basis']}"
+            adv, basis = liquidity["adv"], _liq_basis(liquidity)
         if adv < g.min_avg_dollar_volume:
             gate.append(f"Insufficient liquidity: average daily dollar volume ${adv / 1e6:.1f}M "
                         f"< ${g.min_avg_dollar_volume / 1e6:.0f}M {basis}")

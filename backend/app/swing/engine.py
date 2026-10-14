@@ -23,6 +23,7 @@ from ..data.base import Bar
 from ..market.calendar import NY, MarketCalendar
 from ..strategies.common import NO_TRADE, TRIGGERED, WATCHING, outcome_after, signal_id
 from ..planning.plan import SIGNAL_NONE, PlanInput, build_plan
+from ..strategies.volume import volume_confirmation
 from .base import LONG, SHORT, SwingStrategy, plan_input, sgn
 from .config import SWING_PRIMARY_TIMEFRAMES, SwingConfig
 from .consolidation_breakout import ConsolidationBreakout
@@ -229,6 +230,7 @@ def _evaluate_one(ctx, strat, tf, d, direction, full_history, evaluated_at, is_d
 
 
 def _finish(setup: dict, ctx: SwingContext, d) -> dict:
+    setup["volume_confirmation"] = volume_confirmation(setup["confirmation"])
     if setup["id"] is None:
         setup["id"] = signal_id(ctx.ticker, setup["strategy"], setup["timeframe"],
                                 setup["direction"], "swing", 0)
@@ -278,9 +280,9 @@ def evaluate_swing_symbol(ticker: str, frames: dict[str, list[Bar]], as_of: date
                           data_problems: list[str] | None = None,
                           strategies: list[SwingStrategy] | None = None,
                           full_history: bool = False, is_demo: bool = False,
-                          planning=None, liquidity: dict | None = None
+                          planning=None, liquidity: dict | None = None, volume=None
                           ) -> tuple[SwingContext, list[dict]]:
     ctx = build_swing_context(ticker, frames, as_of, cal, cfg, data_problems, planning,
-                              liquidity)
+                              liquidity, volume)
     return ctx, evaluate_swing_context(ctx, strategies, full_history=full_history,
                                        is_demo=is_demo)

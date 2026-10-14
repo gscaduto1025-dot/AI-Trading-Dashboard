@@ -18,6 +18,8 @@ def _per_mode(day, swing):
     return field(default_factory=lambda: {"day": day, "swing": swing})
 
 
+PARTIAL_VOLUME_POLICIES = ("unverified", "limited")
+
 # Setup-quality weights (points out of 100). Documented in the README; never a probability.
 DEFAULT_WEIGHTS = {
     "higher_timeframe": 15,  # higher-timeframe bias aligned / neutral / opposed
@@ -48,6 +50,19 @@ class PlanningConfig:
     # ---- no-trade conditions
     max_conflicts: int = 2  # this many conflicting signals = contradictory -> NO_TRADE
     max_spread_pct: dict = _per_mode(0.25, 0.75)  # quoted spread as % of price, when known
+    # ---- volume confirmation on a partial-volume feed (Alpaca IEX: IEX trades only)
+    # Consolidated (SIP) volume is used wherever the plan allows it (bars older than 15
+    # minutes on the free plan). Otherwise a volume condition can only be judged on the
+    # feed's own volume, a proxy:
+    #   "unverified" (default): the proxy can reject a signal but never confirm it; such a
+    #                 signal is labelled UNVERIFIED and is never currently actionable.
+    #   "limited":    the proxy may confirm; the signal is labelled LIMITED and may be
+    #                 actionable, with that label.
+    partial_volume_policy: str = "unverified"
+    # ---- current actionability: a trigger is a fresh entry only for this many candles of
+    # its own timeframe after its confirmation close (then it is HISTORICALLY_TRIGGERED).
+    max_entry_age_candles: dict = field(default_factory=lambda: {
+        "5Min": 3, "15Min": 2, "1Day": 3, "1Week": 1})
     # ---- quality score
     weights: dict = field(default_factory=lambda: dict(DEFAULT_WEIGHTS))
     conflict_penalty: float = 10.0  # points removed per conflicting signal
@@ -79,6 +94,10 @@ class PlanningConfig:
             raise ValueError("min_rr must be positive")
         if abs(sum(out.weights.values()) - 100) > 1e-6:
             raise ValueError("quality weights must sum to 100")
+        if out.partial_volume_policy not in PARTIAL_VOLUME_POLICIES:
+            raise ValueError(f"partial_volume_policy must be one of {PARTIAL_VOLUME_POLICIES}")
+        if any(not isinstance(v, int) or v < 1 for v in out.max_entry_age_candles.values()):
+            raise ValueError("max_entry_age_candles values must be integers >= 1")
         return out
 
 

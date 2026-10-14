@@ -71,7 +71,7 @@ def quality_inputs(ctx: StrategyContext, tfd: TFData, i: int, direction: str,
     htf_state = "aligned" if htf["label"] == want else "neutral" if htf["label"] == "neutral" \
         else "opposed"
     strengths = [l["strength"] for l in levels if l.get("strength") is not None]
-    rv = tfd.relvol[i] if tfd.volume_available else None
+    rv, rv_note = tfd.volume(i).quality_rv()
     b = tfd.bars[i]
     e9, e20, vw = tfd.ema9[i], tfd.ema20[i], tfd.vwap[i]
     if None in (e9, e20, vw):
@@ -83,7 +83,7 @@ def quality_inputs(ctx: StrategyContext, tfd: TFData, i: int, direction: str,
     return QualityInputs(
         htf_state, htf["detail"], max(strengths) if strengths else None,
         f"strongest supporting level {max(strengths):.0f}/100" if strengths else "",
-        rv, "" if rv is not None else "volume unavailable on this feed (scored neutral)",
+        rv, rv_note,
         structure, detail)
 
 

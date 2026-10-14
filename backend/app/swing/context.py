@@ -22,6 +22,8 @@ from ..levels.model import SWING_K, Swing
 from ..market.calendar import NY, MarketCalendar
 from ..market.timeframes import bar_end, spec
 from ..planning.config import PlanningConfig
+from ..strategies.common import _liq_basis
+from ..strategies.volume import VolumeReading, VolumeSource, masked_overlay, read_volume
 from .config import SwingConfig
 
 
@@ -41,6 +43,9 @@ class SwingTF:
     swings: list[Swing]
     k: int
     _zones: dict = field(default_factory=dict)
+    full_bars: list[Bar] | None = None  # bars with consolidated (SIP) volume substituted
+    covered: list[bool] = field(default_factory=list)
+    volume_src: VolumeSource = field(default_factory=VolumeSource)
 
     def atr_before(self, i: int) -> float:
         for j in range(i - 1, -1, -1):
@@ -49,10 +54,17 @@ class SwingTF:
         b = self.bars[max(i - 1, 0)]
         return max(b.high - b.low, 1e-6)
 
-    def relvol(self, i: int, n: int = 20) -> float | None:
-        prior = [b.volume for b in self.bars[max(0, i - n):i]]
+    def relvol(self, i: int, n: int = 20, bars: list[Bar] | None = None) -> float | None:
+        bars = bars or self.bars
+        prior = [b.volume for b in bars[max(0, i - n):i]]
         avg = sum(prior) / len(prior) if prior else 0
-        return self.bars[i].volume / avg if avg > 0 else None
+        return bars[i].volume / avg if avg > 0 else None
+
+    def volume(self, i: int) -> VolumeReading:
+        """Relative volume of candle i with its verification level (see volume.py)."""
+        full = (self.relvol(i, bars=self.full_bars)
+                if self.full_bars is not None and self.covered[i] else None)
+        return read_volume(self.relvol(i), full, self.volume_available, self.volume_src)
 
     @property
     def volume_available(self) -> bool:
@@ -105,7 +117,8 @@ class SwingTF:
         return "mixed"
 
 
-def build_tf(tf: str, bars: list[Bar], cal: MarketCalendar, as_ts: int) -> SwingTF:
+def build_tf(tf: str, bars: list[Bar], cal: MarketCalendar, as_ts: int,
+             vsrc: VolumeSource | None = None) -> SwingTF:
     s = spec(tf)
     bars = [b for b in sorted(bars, key=lambda b: b.time)
             if bar_end(b, s, cal, "regular") <= as_ts]
@@ -113,8 +126,11 @@ def build_tf(tf: str, bars: list[Bar], cal: MarketCalendar, as_ts: int) -> Swing
     closes = [b.close for b in bars]
     k = SWING_K.get(tf, 3)
     swings = find_swings(bars, k, tf, lambda b: b.time) if len(bars) > 2 * k else []
+    vsrc = vsrc or VolumeSource()
+    full, covered = masked_overlay(bars, end, vsrc.overlay(tf))
     return SwingTF(tf, bars, end, ind.atr(bars), ind.ema(closes, 20), ind.ema(closes, 50),
-                   ind.ema(closes, 200), swings, k)
+                   ind.ema(closes, 200), swings, k, full_bars=full, covered=covered,
+                   volume_src=vsrc)
 
 
 def _trend(close, fast, slow) -> str:
@@ -195,9 +211,10 @@ def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: dateti
                         cal: MarketCalendar, cfg: SwingConfig,
                         data_problems: list[str] | None = None,
                         planning: PlanningConfig | None = None,
-                        liquidity: dict | None = None) -> SwingContext:
+                        liquidity: dict | None = None,
+                        volume: VolumeSource | None = None) -> SwingContext:
     as_ts = int(as_of.timestamp())
-    tfs = {tf: build_tf(tf, frames.get(tf, []), cal, as_ts) for tf in ("1Day", "1Week")
+    tfs = {tf: build_tf(tf, frames.get(tf, []), cal, as_ts, volume) for tf in ("1Day", "1Week")
            if frames.get(tf)}
     support = {tf: build_tf(tf, frames.get(tf, []), cal, as_ts) for tf in ("4Hour", "1Hour")
                if frames.get(tf)}
@@ -210,7 +227,7 @@ def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: dateti
         adv = sum(b.close * b.volume for b in recent) / len(recent)
         basis = "on this feed"
         if liquidity is not None:  # IEX volume is a small share of the market: use SIP
-            adv, basis = liquidity["adv"], f"on {liquidity['basis']}"
+            adv, basis = liquidity["adv"], _liq_basis(liquidity)
         if adv < cfg.gates.min_avg_dollar_volume:
             gate.append(f"Insufficient liquidity: average daily dollar volume ${adv / 1e6:.1f}M "
                         f"< ${cfg.gates.min_avg_dollar_volume / 1e6:.0f}M {basis}")

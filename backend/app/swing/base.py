@@ -128,14 +128,14 @@ def quality_inputs(ctx: SwingContext, d: SwingTF, i: int, direction: str,
         else "opposed"
     react = [l.get("reactions") for l in levels if l.get("reactions")]
     strength = min(max(react), 5) * 20.0 if react else None
-    rv = d.relvol(i) if d.volume_available else None
+    rv, rv_note = d.volume(i).quality_rv()
     st = d.structure_at(i + 1)
     trend = st.get("trend")
     ss = "unknown" if trend is None else "mixed" if trend == "mixed" else \
         "aligned" if trend == ("up" if direction == LONG else "down") else "opposed"
     return QualityInputs(hs, htf["detail"], strength,
                          f"setup zone with {max(react)} confirmed reactions" if react else "",
-                         rv, "" if rv is not None else "volume unavailable (scored neutral)",
+                         rv, rv_note,
                          ss, f"{st['label']}; EMA stack {d.ema_stack(i)}")
 
 

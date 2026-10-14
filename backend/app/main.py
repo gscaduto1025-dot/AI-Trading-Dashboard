@@ -50,6 +50,7 @@ from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
+from .strategies.volume import VolumeSource
 from .swing.engine import SORT_KEYS, SWING_STRATEGIES, evaluate_swing_symbol, sort_setups
 
 log = logging.getLogger("tradescope")
@@ -106,6 +107,12 @@ class Service:
                                    if client is not None and not self.is_demo else None)
         self.scanner = OpportunityScanner(self)
         self.backtests = BacktestManager(self)
+        # Every candle length the live engines request: one provider download covers all.
+        lengths = {(tf, FETCH_LIMIT.get(tf, 300)) for frames in MODE_FRAMES.values()
+                   for tf in frames}
+        lengths |= set(self.STRATEGY_FRAMES.items()) | set(self.SWING_FRAMES.items())
+        for tf, limit in sorted(lengths):
+            self.market.reserve_lookback(tf, limit)
         self.trade_log = TradeLog(self.db, self.market)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
@@ -232,16 +239,18 @@ class Service:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
             liquidity = market.consolidated_liquidity(sym) if as_of is None else None
+            volume = self.volume_source(sym, frames, ("5Min", "15Min"), when)
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in ("5Min", "15Min")),
                    when < market.calendar.last_session_started(when, "regular").close,
-                   tuple(problems), liquidity and round(liquidity["adv"]))
+                   tuple(problems), liquidity and round(liquidity["adv"]),
+                   self._volume_key(volume))
             cached = self._strategy_cache.get(key)
             if cached is None:
                 ctx, result = evaluate_symbol(sym, frames, when, market.calendar,
                                               self.strategy_config, problems,
                                               planning=self.planning_config,
-                                              liquidity=liquidity)
+                                              liquidity=liquidity, volume=volume)
                 cached = [s.to_dict() for s in result]
                 self._strategy_cache = {k: v for k, v in self._strategy_cache.items()
                                         if k[0] != sym}  # keep only the newest per symbol
@@ -249,7 +258,8 @@ class Service:
             for s in cached:
                 s["is_demo"] = self.is_demo
             setups += cached
-            per_symbol[sym] = {"status": "ok", "gate_reasons": next(
+            per_symbol[sym] = {"status": "ok", "liquidity": liquidity,
+                               "volume": self._volume_info(volume), "gate_reasons": next(
                 (s["reasons"] for s in cached if s["status"] == "NO_TRADE" and problems), []),
                 "triggered": sum(s["status"] == TRIGGERED for s in cached),
                 "watching": sum(s["status"] == "WATCHING" for s in cached)}
@@ -263,6 +273,35 @@ class Service:
                 "context_timeframes": ["1Hour", "1Day"], "symbols": per_symbol,
                 "is_demo": self.is_demo, "setups": setups, "new_signals": new_signals,
                 "strategies": [{"id": st.id, "name": st.name} for st in STRATEGIES]}
+
+    def volume_source(self, sym: str, frames: dict, tfs, until: datetime | None = None):
+        """What the volume in `frames` represents, with consolidated (SIP) volume overlaid
+        on the signal timeframes `tfs` wherever the feed allows (see volume.py)."""
+        market = self.market
+        scope = market.volume_scope
+        overlays = None
+        if scope == "partial":
+            overlays = {tf: market.volume_overlay(sym, tf, frames.get(tf) or [], until)
+                        for tf in tfs}
+        label = "DEMO" if scope == "demo" else market.feed.label
+        return VolumeSource(scope, label, self.planning_config.partial_volume_policy, overlays)
+
+    @staticmethod
+    def _volume_info(v) -> dict:
+        """API view of a VolumeSource: scope, policy and SIP coverage per timeframe."""
+        cov = {tf: (None if ov is None else datetime.fromtimestamp(ov.covered_until, NY)
+                    .isoformat(timespec="minutes")) for tf, ov in (v.overlays or {}).items()}
+        return {"scope": v.scope, "feed": v.feed_label, "partial_volume_policy": v.policy,
+                "consolidated_volume_until": cov or None,
+                "note": ("Relative volume uses consolidated (SIP) volume for candles that "
+                         "ended before the time shown; later candles only have "
+                         f"{v.feed_label}-only volume (labelled LIMITED/UNVERIFIED)."
+                         if v.scope == "partial" else None)}
+
+    @staticmethod
+    def _volume_key(v) -> tuple:
+        return (v.scope, v.policy, tuple(sorted(
+            (tf, ov.covered_until if ov else None) for tf, ov in (v.overlays or {}).items())))
 
     def _strategy_frames(self, sym: str, when: datetime, replay: bool):
         market = self.market
@@ -318,20 +357,23 @@ class Service:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
             liquidity = market.consolidated_liquidity(sym) if as_of is None else None
+            volume = self.volume_source(sym, frames, self.SWING_REQUIRED, when)
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in self.SWING_FRAMES),
-                   tuple(problems), liquidity and round(liquidity["adv"]))
+                   tuple(problems), liquidity and round(liquidity["adv"]),
+                   self._volume_key(volume))
             cached = self._swing_cache.get(key)
             if cached is None:
                 _, cached = evaluate_swing_symbol(sym, frames, when, market.calendar,
                                                   self.swing_config, problems,
                                                   is_demo=self.is_demo,
                                                   planning=self.planning_config,
-                                                  liquidity=liquidity)
+                                                  liquidity=liquidity, volume=volume)
                 self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] != sym}
                 self._swing_cache[key] = cached
             setups += cached
-            per_symbol[sym] = {"status": "ok",
+            per_symbol[sym] = {"status": "ok", "liquidity": liquidity,
+                               "volume": self._volume_info(volume),
                                "gate_reasons": next((s["reasons"] for s in cached
                                                      if s["status"] == "NO_TRADE" and problems), []),
                                "triggered": sum(s["status"] == TRIGGERED for s in cached),

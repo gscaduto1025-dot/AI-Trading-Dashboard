@@ -121,7 +121,11 @@ function Table({ rows, title, tone, onOpen }: { rows: ScannerRow[]; title: strin
               const dir = r.direction === "LONG" ? "long" : "short";
               const dim = r.status === "NO_TRADE";
               const stale = r.data_freshness !== "fresh" && r.data_freshness !== "demo";
-              const liveFail = r.status === "TRIGGERED" && r.live_checks_failed.length > 0;
+              const liveFail = r.signal_state === "HISTORICALLY_TRIGGERED";
+              const volNote =
+                r.volume_confirmation === "LIMITED" || r.volume_confirmation === "UNVERIFIED" || r.volume_confirmation === "UNAVAILABLE"
+                  ? r.volume_confirmation
+                  : null;
               return (
                 <tr
                   key={r.id}
@@ -157,7 +161,19 @@ function Table({ rows, title, tone, onOpen }: { rows: ScannerRow[]; title: strin
                     {r.actionable && <span className="ml-1 text-[9px] font-bold text-bull">●</span>}
                     {liveFail && (
                       <span className="ml-1 text-[9px] font-bold text-wait" title={r.live_checks_failed.join("\n")}>
-                        ⚠ not actionable at live price
+                        historical · not a fresh entry
+                      </span>
+                    )}
+                    {volNote && (
+                      <span
+                        className="ml-1 rounded px-1 text-[9px] font-bold text-wait ring-1 ring-wait/40"
+                        title={
+                          volNote === "UNAVAILABLE"
+                            ? "Volume confirmation unavailable: the feed reported no volume."
+                            : `Volume confirmation ${volNote}: judged on IEX-only volume (consolidated volume not available for the signal candle yet).`
+                        }
+                      >
+                        vol {volNote.toLowerCase()}
                       </span>
                     )}
                   </td>
@@ -392,7 +408,7 @@ export default function ScannerView({
       </div>
       <p className="text-center text-[10px] text-faint">
         Every row is a setup computed by the day/swing strategy engines and the trade-planning engine; ranked by status, then the
-        transparent quality score (not a win probability). ● = triggered on fresh data. Click a row to open its chart and full analysis.
+        transparent quality score (not a win probability). ● = currently actionable (triggered, fresh data, entry conditions still valid at the live price). “historical” = it triggered but is no longer a fresh entry; “vol unverified/limited” = volume judged on IEX-only data. Click a row to open its chart and full analysis.
       </p>
     </div>
   );

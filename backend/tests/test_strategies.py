@@ -80,6 +80,9 @@ def test_breakout_volume_condition_is_na_when_feed_has_no_volume():
     assert s.status == TRIGGERED
     vol = next(c for c in s.confirmation if "relative volume" in c.name)
     assert vol.passed is None and "unavailable" in vol.detail
+    # Never labelled fully confirmed without the volume it depends on.
+    assert vol.verification == "UNAVAILABLE"
+    assert s.to_dict()["volume_confirmation"] == "UNAVAILABLE"
 
 
 # ---------------------------------------------------------- 2. opening range breakout

@@ -346,3 +346,81 @@ def test_history_endpoint_json_and_csv(live_client):
 def test_settings_repr_hides_secrets():
     s = Settings(alpaca_key_id="PKTESTKEY", alpaca_secret_key="SECRETVALUE")
     assert "SECRETVALUE" not in repr(s) and "PKTESTKEY" not in repr(s)
+
+
+def _counting_market(now=OPEN_NOW):
+    fake = FakeAlpaca(now)
+    fake.page_size = 300  # Alpaca returns intraday bars in small pages
+    mono = [0.0]
+    client = AlpacaClient("PKTESTKEY", "SECRETVALUE", transport=fake.transport(),
+                          sleep=lambda s: None, rate_limiter=RateLimiter(10_000),
+                          wall_clock=lambda: now.timestamp())
+    market = MarketDataService(AlpacaSource(client), symbols=WATCHLIST, now_fn=lambda: now,
+                               monotonic=lambda: mono[0])
+    bars = lambda: [r for r in fake.requests if r.url.path == "/v2/stocks/bars"]
+    return fake, market, mono, bars
+
+
+def test_candle_lengths_share_one_provider_series_and_match_direct_fetches():
+    fake, market, mono, bars = _counting_market()
+    wide = market.get_candles("SPY", "4Hour", "regular", 200)  # 30Min bars, far back
+    n = len(bars())
+    assert n > 1  # paginated
+    h300 = market.get_candles("SPY", "1Hour", "regular", 300)
+    h500 = market.get_candles("SPY", "1Hour", "regular", 500)
+    assert len(bars()) == n  # sliced from the shared 30Min series, no new requests
+    # Identical to what a separate, direct fetch builds.
+    _, fresh, _, _ = _counting_market()
+    for tf, limit, got in (("1Hour", 300, h300), ("1Hour", 500, h500), ("4Hour", 200, wide)):
+        ref = fresh.get_candles("SPY", tf, "regular", limit)
+        assert got.bars == ref.bars and got.complete == ref.complete
+
+
+def test_stale_series_refreshes_incrementally_and_fully_when_needed():
+    fake, market, mono, bars = _counting_market()
+    market.get_candles("SPY", "1Hour", "regular", 300)
+    n = len(bars())
+    mono[0] += 60  # past the TTL
+    market._cache = type(market._cache)()  # drop the candle-set cache, keep the series
+    market.get_candles("SPY", "1Hour", "regular", 300)
+    new = bars()[n:]
+    assert len(new) == 1  # one small page: from the last bar minus a one-day overlap
+    since = datetime.fromisoformat(new[0].url.params["start"].replace("Z", "+00:00"))
+    assert OPEN_NOW - since <= timedelta(days=1, hours=2)
+    # A request reaching further back than the stored series is fetched in full.
+    m = len(bars())
+    market.get_candles("SPY", "4Hour", "regular", 200)
+    assert len(bars()) - m > 1
+    # And the whole series is re-fetched every 6 hours (split re-adjustments).
+    m = len(bars())
+    mono[0] += 6 * 3600 + 1
+    market._cache = type(market._cache)()
+    market.get_candles("SPY", "1Hour", "regular", 300)
+    first = bars()[m]
+    assert datetime.fromisoformat(first.url.params["start"].replace("Z", "+00:00")) < \
+        OPEN_NOW - timedelta(days=20)
+
+
+def test_regular_candles_are_not_refetched_every_30s_outside_the_session():
+    from app.market.sources import FEEDS
+    from app.market.timeframes import spec
+    m = MarketDataService(AlpacaSource(AlpacaClient("k", "s")), symbols=["SPY"])
+    tf = spec("1Hour")
+    assert m._ttl(tf, "regular", "regular") == 30.0
+    assert m._ttl(tf, "after-hours", "regular", until_open=50_000) == 300.0
+    assert m._ttl(tf, "pre-market", "regular", until_open=90) == 90.0  # never past the open
+    assert m._ttl(tf, "after-hours", "extended") == 30.0  # extended candles still form
+
+
+def test_full_fetches_cover_the_deepest_lookback_already_seen():
+    fake, market, mono, bars = _counting_market()
+    market.get_candles("SPY", "1Hour", "regular", 300)
+    market.get_candles("SPY", "4Hour", "regular", 200)  # deeper: SPY series widened once
+    n = len(bars())
+    market.get_candles("QQQ", "1Hour", "regular", 300)  # fetched at the deepest depth...
+    market.get_candles("QQQ", "4Hour", "regular", 200)  # ...so this is a slice
+    qqq = [r for r in bars()[n:] if r.url.params["symbols"] == "QQQ"]
+    spy_first = [r for r in bars()[:n] if r.url.params["symbols"] == "SPY"
+                 and "page_token" not in r.url.params]
+    assert len([r for r in qqq if "page_token" not in r.url.params]) == 1
+    assert qqq[0].url.params["start"] == spy_first[-1].url.params["start"]

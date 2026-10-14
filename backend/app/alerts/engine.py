@@ -67,7 +67,8 @@ def incomplete(r: dict) -> list[str]:
     if not r.get("last_candle"):
         out.append("no completed candle")
     if not r.get("actionable"):
-        out.append("scanner did not mark the row actionable")
+        failed = [c["name"] for c in r.get("entry_checks") or [] if not c["passed"]]
+        out.append("not currently actionable" + (f" ({', '.join(failed)})" if failed else ""))
     return out
 
 
@@ -207,6 +208,10 @@ class _Run:
             "targets": [t for t in (r.get("target1"), r.get("target2")) if t is not None],
             "risk_reward": r.get("risk_reward"), "quality": r.get("quality"),
             "setup_id": r["id"], "trigger_time": r.get("trigger_time"),
+            "signal_state": r.get("signal_state"),
+            "volume_confirmation": r.get("volume_confirmation"),
+            "live_price": r.get("live_price"), "live_risk_reward": r.get("live_risk_reward"),
+            "entry_checks": r.get("entry_checks") or [],
         })
         return a
 

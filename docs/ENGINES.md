@@ -638,27 +638,67 @@ tables.
 flagged in red with the reason. The engines' data gates make its setups NO_TRADE, and the
 scanner marks them not actionable ("Data stale: ..."). The other tickers are unaffected.
 
-**Live-price revalidation.** Triggers are confirmed on completed candles: for swing
-setups that is the previous daily or weekly close, so price may have moved a long way
-since. A TRIGGERED row is `actionable` only if, at the latest trade (a fresh, non-stale
-quote):
-- price has not reached the stop (swing: neither has today's session low/high, which no
-  completed candle has shown yet);
-- price is not beyond the setup's invalidation level (swing);
-- price has not reached T1;
-- reward/risk from the live price to T1 still meets the planning minimum.
+**Historically triggered vs currently actionable.** `status` is the engine's verdict on
+completed candles; TRIGGERED means the pattern *happened*. Each TRIGGERED row also gets a
+`signal_state`:
+- `CURRENTLY_ACTIONABLE`: a fresh entry *now*;
+- `HISTORICALLY_TRIGGERED`: it triggered, but at least one current entry check fails.
 
-Failures are listed in `live_checks_failed` (also in `requirement_issues`) and the scanner
-shows "not actionable at live price". Rows also carry `live_price` and `live_risk_reward`.
-The engine's status, plan and signal log are unchanged; a row with no fresh live price is
-not actionable. Actionable alerts follow the row's `actionable` flag.
+Only `CURRENTLY_ACTIONABLE` rows are `actionable`, rank first and can raise actionable
+alerts. A favourable reward/risk at the current price is never enough on its own: the
+strategy's own entry conditions are rechecked against the latest trade (a fresh,
+non-stale quote). Every check is listed in `entry_checks`; the failed ones are also in
+`live_checks_failed` and `requirement_issues`:
+- **Entry window open** (day): regular session, between the strategy's entry start and
+  `stop_entries_minutes_before_close`. Day triggers are never fresh entries after the close.
+- **Trigger age**: at most `max_entry_age_candles` candles of the setup's timeframe since
+  the confirmation close (planning config; default 5Min 3, 15Min 2, 1Day 3, 1Week 1).
+- **Live price inside the entry zone**: beyond the trigger level and not past the zone's
+  far edge. "Back through the trigger" and "chasing" both fail.
+- **Stop not reached** (swing setups also check today's session low/high, which no
+  completed candle includes yet), **not beyond the invalidation level** (swing), **T1 not
+  reached**, and **reward/risk from the live price** at or above the planning minimum.
+- **Volume confirmation verified**: the setup's `volume_confirmation` is FULL, LIMITED or
+  NOT_REQUIRED (see below).
 
-**Liquidity on the IEX feed.** IEX volume is IEX's own trades, typically 1-6% of the
-consolidated tape, so the `min_avg_dollar_volume` gate (day and swing) is evaluated on
-consolidated (SIP) daily volume of the 20 sessions before the current one. Alpaca's free
-plan allows that history (it is older than 15 minutes). If it can't be fetched, the gate
-falls back to the feed's own volume and says "on this feed". Backtests and `as_of`
-replays still use the feed's volume.
+The engine's status, plan and signal log are unchanged by these checks. If a trigger
+becomes actionable on a later scan (for example once consolidated volume confirms it), its
+alert is sent then, once.
+
+**Volume confirmation (IEX feed).** IEX volume is IEX's own trades, typically 1-6% of the
+consolidated tape, so relative volume computed from it is only a proxy. Alpaca's free plan
+serves consolidated (SIP) bars older than 15 minutes, so the service overlays SIP volume
+on every 5Min/15Min/1Day/1Week candle that ended at least 16 minutes ago
+(`volume_overlay`). Relative volume is computed from consolidated volume only for those
+candles. Every volume condition carries a `verification`, and each setup a
+`volume_confirmation` (the weakest of its required volume conditions):
+
+| Level | Meaning |
+| --- | --- |
+| `FULL` | consolidated volume (SIP overlay, a SIP feed, or simulated demo volume) |
+| `LIMITED` | IEX-only proxy accepted as confirmation (`partial_volume_policy: "limited"`) |
+| `UNVERIFIED` | IEX-only proxy, default policy: it may reject a signal but never confirms it |
+| `UNAVAILABLE` | the feed reported no volume |
+| `NOT_REQUIRED` | the strategy does not use a volume condition |
+
+`partial_volume_policy` (planning config) is `"unverified"` by default, the conservative
+choice: a volume-dependent trigger on a candle too recent for SIP is shown as TRIGGERED
+but is not actionable until consolidated volume confirms it. With 5Min triggers that
+usually means never, because SIP arrives after the 3-candle entry age. `"limited"`
+accepts the IEX proxy and labels the signal LIMITED. Proxy evidence never scores as
+measured volume in the quality score. If the SIP request fails, every candle falls back
+to the labelled proxy.
+
+Coverage per symbol is in the strategy and swing APIs (`symbols.<T>.volume`) and on the
+scanner ticker cards (`volume`). Backtests and `as_of` replays label the history's volume
+scope but do not overlay SIP: on the IEX feed their volume conditions are UNVERIFIED.
+
+**Liquidity on the IEX feed.** The `min_avg_dollar_volume` gate (day and swing) is
+evaluated on consolidated (SIP) daily volume of the 20 sessions before the current one.
+The record (`liquidity` on ticker cards and `symbols.<T>.liquidity`) carries `feed: "sip"`,
+`first_session`, `last_session`, the excluded current session and `fetched_at`. The gate
+message names the sessions. If SIP can't be fetched, the gate falls back to the feed's own
+volume and says "on this feed".
 
 **Filters** (UI and `GET /api/scanner`):
 - `mode=day|swing`;
@@ -700,8 +740,11 @@ Clicking a ticker card opens its chart.
 - requirement failures and actionability are set correctly;
 - ticker summaries, and every filter;
 - stale and unavailable tickers are flagged and never actionable;
-- TRIGGERED rows are revalidated against the live price (`tests/test_live_revalidation.py`,
-  which also covers the consolidated-volume liquidity gate);
+- the background scheduler scans by itself at startup and on each new candle, and stays
+  idle while a candle is forming;
+- `signal_state`, entry checks, volume verification levels, the SIP overlay and its
+  15-minute embargo, the liquidity labels and alert consistency
+  (`tests/test_signal_quality.py`, on day and swing fixtures);
 - candle-aware scheduling: no rescan inside a forming 5-minute candle, rescans on a new
   candle, the close or a watchlist change;
 - no Claude calls;

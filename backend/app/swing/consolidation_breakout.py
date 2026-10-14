@@ -102,11 +102,11 @@ class ConsolidationBreakout(SwingStrategy):
             if not (s * (p.close - edge) <= 0 and
                     s * (b.close - (edge + s * cfg.breakout_buffer_atr * atr)) > 0):
                 continue
-            rv = d.relvol(i)
-            vol_ok = None if not d.volume_available or rv is None else rv >= cfg.min_rel_volume
-            if vol_ok is False:
+            vol = d.volume(i)
+            if vol.rejects(cfg.min_rel_volume):
                 weak.append(f"{fmt_day(b.time)} broke the {r['bars']}-candle range on relative "
-                            f"volume {rv:.2f} < {cfg.min_rel_volume}")
+                            f"volume {vol.rv:.2f} < {cfg.min_rel_volume} "
+                            f"({vol.level}, {vol.source})")
                 continue
             base, base_why = self._anchor(r, b, direction, cfg)
             htf = ctx.htf(d.tf, i)
@@ -125,9 +125,9 @@ class ConsolidationBreakout(SwingStrategy):
                           f"{fmt_day(b.time)} close {b.close:.2f} vs {edge:.2f} "
                           f"{'+' if direction == LONG else '-'} {cfg.breakout_buffer_atr} ATR",
                           b.time),
-                Condition(f"Relative volume >= {cfg.min_rel_volume}", vol_ok, True,
-                          "volume unavailable on this feed" if vol_ok is None
-                          else f"{rv:.2f}x 20-candle average", b.time),
+                Condition(f"Relative volume >= {cfg.min_rel_volume}",
+                          vol.passed(cfg.min_rel_volume), True, vol.detail("20-candle average"),
+                          b.time, vol.level),
                 Condition("Higher timeframe aligned (supporting)",
                           htf["label"] == ("bullish" if direction == LONG else "bearish"), False,
                           htf["detail"]),

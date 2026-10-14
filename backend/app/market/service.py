@@ -135,6 +135,9 @@ class MarketDataService:
         self._calendar_day: date | None = None
         self.calendar_error: str | None = None
         self._cache = _TTLCache()
+        self._raw: dict[tuple, dict] = {}  # shared provider bars (see _raw_bars)
+        self._raw_locks: dict[tuple, threading.Lock] = {}
+        self._raw_depth: dict[str, timedelta] = {}  # deepest lookback seen per timeframe
         self._mono = monotonic  # cache clock (injectable so tests can move time)
         self._lock = threading.Lock()
 
@@ -202,11 +205,17 @@ class MarketDataService:
             raise InvalidRequest(f"Unsupported symbol {symbol!r}; choose one of {self.symbols}")
         return symbol
 
-    def _ttl(self, tf: TimeframeSpec, phase: str) -> float:
+    def _ttl(self, tf: TimeframeSpec, phase: str, session: str = "extended",
+             until_open: float | None = None) -> float:
         live = phase in ("regular", "pre-market", "after-hours")
         if self.source.is_demo:
             return 3600.0
         if tf.intraday:
+            if live and session == "regular" and phase != "regular":
+                # Pre-market / after-hours: no regular-session candle can form before the
+                # next open, so regular-session candles are re-fetched only every 5 min -
+                # but never cached past the open.
+                return max(5.0, min(300.0, until_open if until_open is not None else 300.0))
             return min(30.0, max(5.0, tf.minutes * 60 / 6)) if live else 300.0
         return 60.0 if live else 900.0
 
@@ -229,16 +238,81 @@ class MarketDataService:
 
         cutoff = self.cutoff(now)
         start = lookback_start(tf, cal, cutoff, limit, session)
-        phase = cal.status(now)["phase"]
+        status = cal.status(now)
+        phase = status["phase"]
+        nxt = status.get("next_open")
+        until_open = ((datetime.fromisoformat(nxt) - now).total_seconds()
+                      if isinstance(nxt, str) else None)
+        ttl = self._ttl(tf, phase, session, until_open)
         try:
-            raw = self.source.fetch_bars(symbol, tf.fetch, start, cutoff,
-                                         max_items=MAX_HISTORY_BARS)
+            raw = self._raw_bars(symbol, tf.fetch, start, cutoff, ttl)
         except DataError as exc:
             self._cache.put(key, exc, 10.0, self._mono())  # brief negative cache
             raise
         result = self._build(symbol, tf, session, raw, now, cal, limit)
-        self._cache.put(key, result, self._ttl(tf, phase), self._mono())
+        self._cache.put(key, result, ttl, self._mono())
         return result
+
+    def reserve_lookback(self, timeframe: str, limit: int, session: str = "regular") -> None:
+        """Declare a candle length the app will request, so the first full download of
+        the underlying provider timeframe already covers it (see _raw_bars)."""
+        tf = spec(timeframe)
+        cutoff = self.cutoff()
+        start = lookback_start(tf, self.calendar, cutoff, max(1, min(limit, 5000)), session)
+        with self._lock:
+            cur = self._raw_depth.get(tf.fetch, timedelta(0))
+            self._raw_depth[tf.fetch] = max(cur, cutoff - start + timedelta(days=1))
+
+    RAW_FULL_REFRESH_SECONDS = 6 * 3600  # full re-fetch: picks up split re-adjustments
+    RAW_OVERLAP = {True: timedelta(days=1), False: timedelta(days=14)}  # intraday / daily+
+
+    def _raw_bars(self, symbol: str, fetch_tf: str, start: datetime, cutoff: datetime,
+                  ttl: float) -> list[Bar]:
+        """Provider bars for [start, cutoff), shared by every candle request that needs the
+        same Alpaca timeframe (e.g. 1Hour and 4Hour candles of any length all come from
+        30Min bars). Alpaca pages intraday bars in small chunks (a few hundred per page),
+        so re-downloading the whole history for each candle length and every refresh
+        exhausted the request quota. Instead:
+          * a request inside a fresh series (within `ttl`) is served by slicing it;
+          * a stale series is refreshed incrementally: only bars from the last stored bar
+            minus an overlap (1 day intraday, 14 days daily/weekly, so late corrections
+            and the forming bar are re-read) are fetched again;
+          * a request reaching further back, or a series older than 6 hours, is fetched in
+            full.
+        Returned bars are exactly what a direct fetch of [start, cutoff) would return."""
+        k = (symbol, fetch_tf)
+        with self._lock:
+            lock = self._raw_locks.setdefault(k, threading.Lock())
+            # Remember the deepest history any caller needed for this timeframe, so a full
+            # fetch for the next symbol covers every candle length at once instead of being
+            # re-downloaded wider each time a longer lookback is requested.
+            depth = max(self._raw_depth.get(fetch_tf, timedelta(0)), cutoff - start)
+            self._raw_depth[fetch_tf] = depth
+        with lock:
+            mono = self._mono()
+            ent = self._raw.get(k)
+            if ent and (ent["start"] > start
+                        or mono - ent["full_at"] > self.RAW_FULL_REFRESH_SECONDS):
+                ent = None
+            if ent is None:
+                full_start = min(start, cutoff - depth)
+                bars = self.source.fetch_bars(symbol, fetch_tf, full_start, cutoff,
+                                              max_items=MAX_HISTORY_BARS)
+                ent = {"start": full_start, "cutoff": cutoff, "bars": bars, "fetched": mono,
+                       "full_at": mono}
+                self._raw[k] = ent
+            elif mono - ent["fetched"] >= ttl:
+                intraday = spec(fetch_tf).intraday
+                last = ent["bars"][-1].time if ent["bars"] else int(ent["start"].timestamp())
+                since = max(ent["start"], datetime.fromtimestamp(last, timezone.utc)
+                            - self.RAW_OVERLAP[intraday])
+                new = self.source.fetch_bars(symbol, fetch_tf, since, cutoff,
+                                             max_items=MAX_HISTORY_BARS)
+                since_ts = int(since.timestamp())
+                ent["bars"] = [b for b in ent["bars"] if b.time < since_ts] + new
+                ent["cutoff"], ent["fetched"] = cutoff, mono
+            lo, hi = int(start.timestamp()), int(cutoff.timestamp())
+            return [b for b in ent["bars"] if lo <= b.time < hi]
 
     def get_history(self, symbol: str, timeframe: str, start: datetime, end: datetime,
                     session: str = "regular", any_symbol: bool = False) -> CandleSet:
@@ -294,8 +368,61 @@ class MarketDataService:
             self._cache.put(key, DataError("too few consolidated sessions"), 600.0, self._mono())
             return None
         out = {"adv": sum(b.close * b.volume for b in recent) / len(recent),
-               "sessions": len(recent), "basis": "consolidated volume (SIP)"}
+               "sessions": len(recent), "basis": "consolidated volume (SIP)",
+               "feed": "sip", "feed_label": "SIP (consolidated, historical daily bars)",
+               "first_session": ny_date(recent[0].time).isoformat(),
+               "last_session": ny_date(recent[-1].time).isoformat(),
+               "excludes_session": current.isoformat(),
+               "fetched_at": now.astimezone(NY).isoformat(timespec="seconds")}
         self._cache.put(key, out, 6 * 3600.0, self._mono())
+        return out
+
+    SIP_EMBARGO_SECONDS = 15 * 60 + 60  # free plan: SIP older than 15 min (+ 1 min grace)
+    OVERLAY_STEP = {"5Min": 300, "15Min": 900, "1Day": 3600, "1Week": 3600}
+
+    @property
+    def volume_scope(self) -> str:
+        """What the feed's volume represents: demo, partial (IEX only) or consolidated."""
+        if self.source.is_demo:
+            return "demo"
+        return "partial" if self.feed.bars_feed == "iex" else "consolidated"
+
+    def volume_overlay(self, symbol: str, tf: str, bars: list[Bar],
+                       until: datetime | None = None):
+        """Consolidated (SIP) volume for `bars` (IEX candles of `tf`) wherever Alpaca's
+        free plan provides it: candles ending at least 16 minutes ago (and no later than
+        `until`, for point-in-time replays). Returns a strategies.volume.VolumeOverlay, or
+        None when not applicable (consolidated/demo feed) or unavailable (the caller then
+        labels relative volume LIMITED/UNVERIFIED instead of treating IEX as the market).
+
+        Coverage is floored to the timeframe's step so results change only when a new
+        candle becomes covered (strategy caches stay valid between candles)."""
+        from ..strategies.volume import VolumeOverlay
+        step = self.OVERLAY_STEP.get(tf)
+        if self.volume_scope != "partial" or step is None or not bars:
+            return None
+        limit = self.now() - timedelta(seconds=self.SIP_EMBARGO_SECONDS)
+        if until is not None:
+            limit = min(limit, until)
+        covered = int(limit.timestamp()) // step * step
+        first = min(b.time for b in bars)
+        start = datetime.fromtimestamp(first, NY).replace(hour=0, minute=0, second=0)
+        if first >= covered:
+            return VolumeOverlay({}, covered)
+        key = ("volume_overlay", symbol.upper(), tf, int(start.timestamp()), covered)
+        cached = self._cache.get(key, self._mono())
+        if cached is not None:
+            return None if isinstance(cached, DataError) else cached
+        try:
+            raw = self.source.fetch_bars(symbol.upper(), spec(tf).fetch, start,
+                                         datetime.fromtimestamp(covered, timezone.utc),
+                                         feed="sip")
+        except DataError as exc:
+            log.warning("Consolidated %s volume unavailable for %s: %s", tf, symbol, exc)
+            self._cache.put(key, exc, 600.0, self._mono())
+            return None
+        out = VolumeOverlay({b.time: b.volume for b in raw}, covered)
+        self._cache.put(key, out, max(float(step), 300.0) * 2, self._mono())
         return out
 
     def _build(self, symbol: str, tf: TimeframeSpec, session: str, raw: list[Bar],

@@ -10,6 +10,7 @@ import uuid
 from datetime import date, datetime
 
 from ..market.calendar import NY
+from ..strategies.volume import VolumeSource
 from .config import EXEC_TF, BacktestConfig
 from .data import BUNDLED, BundledHistory, MarketHistory, validate_series
 from .runner import LIMITATIONS, MAX_DAYS, report, run_backtest
@@ -119,7 +120,11 @@ class BacktestManager:
                 start=date.fromisoformat(req["start"]), end=date.fromisoformat(req["end"]),
                 cal=svc.market.calendar,
                 engine_cfg={"strategy": svc.strategy_config, "swing": svc.swing_config,
-                            "planning": svc.planning_config},
+                            "planning": svc.planning_config,
+                            "volume": None if req["data_source"] == "bundled" else
+                            VolumeSource(svc.market.volume_scope,
+                                         "DEMO" if svc.is_demo else svc.market.feed.label,
+                                         svc.planning_config.partial_volume_policy)},
                 settings=req["settings"], universe=req["universe"], progress=progress)
             rep = report(run)
             summary = {"trades": rep["overall"].get("trades", 0),

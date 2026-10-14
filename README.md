@@ -144,6 +144,10 @@ Every feature is a tab or panel of the dashboard, backed by the API.
 
 - **Market data** (`app/market`):
   - Alpaca bars, snapshots and calendar, with pagination, retries and a rate limiter;
+  - one provider series per symbol and Alpaca timeframe, downloaded once at the deepest
+    lookback the app uses, refreshed incrementally and fully every 6 hours. Alpaca pages
+    intraday bars in small chunks, so per-request downloads would exhaust the free plan's
+    200 requests/minute;
   - regular and extended sessions, NYSE holidays and early closes;
   - 1-minute to weekly candles, with only *completed* candles used for analysis;
   - freshness checks (stale, delayed, unavailable) and integrity checks (corrupt,
@@ -251,7 +255,10 @@ How the main areas are verified (see the test files in `backend/tests`):
 
 **Data:**
 - **Free feeds.** The free IEX feed covers one exchange, so its volume is a small fraction
-  of the consolidated volume. Free options data is *indicative*, not executable, so the
+  of the consolidated volume. The app overlays consolidated (SIP) volume on candles older
+  than 15 minutes, which the free plan allows. Relative volume on newer candles is labelled
+  UNVERIFIED (default) or LIMITED and is never treated as full-market volume; see
+  `partial_volume_policy` in [docs/ENGINES.md](docs/ENGINES.md). Free options data is *indicative*, not executable, so the
   app never recommends a contract from it.
 - **Polling, not streaming.** Prices and scans update on a schedule: quotes every 10
   seconds while the market is open (60 s when closed), scans on candle closes. There is no websocket streaming.

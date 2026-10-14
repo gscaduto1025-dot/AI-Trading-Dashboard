@@ -48,11 +48,11 @@ class DailyBreakout(SwingStrategy):
             if not broken:
                 continue
             z = max(broken, key=lambda z: s * edge(z))  # the most significant level cleared
-            rv = d.relvol(i)
-            vol_ok = None if not d.volume_available or rv is None else rv >= cfg.min_rel_volume
-            if vol_ok is False:
+            vol = d.volume(i)
+            if vol.rejects(cfg.min_rel_volume):
                 weak.append(f"{fmt_day(b.time)} close beyond {word} {edge(z):.2f} on relative "
-                            f"volume {rv:.2f} < {cfg.min_rel_volume}")
+                            f"volume {vol.rv:.2f} < {cfg.min_rel_volume} "
+                            f"({vol.level}, {vol.source})")
                 continue
             htf = ctx.htf(d.tf, i)
             opposed = htf["label"] == ("bearish" if direction == LONG else "bullish")
@@ -69,9 +69,9 @@ class DailyBreakout(SwingStrategy):
                 Condition("Completed candle closed beyond the zone", True, True,
                           f"{fmt_day(b.time)} close {b.close:.2f} vs {edge(z):.2f} + "
                           f"{cfg.breakout_buffer_atr} ATR", b.time),
-                Condition(f"Relative volume >= {cfg.min_rel_volume}", vol_ok, True,
-                          "volume unavailable on this feed" if vol_ok is None
-                          else f"{rv:.2f}x 20-candle average", b.time),
+                Condition(f"Relative volume >= {cfg.min_rel_volume}",
+                          vol.passed(cfg.min_rel_volume), True, vol.detail("20-candle average"),
+                          b.time, vol.level),
                 Condition("Higher-timeframe structure not opposed", not opposed,
                           cfg.require_htf_not_opposed, htf["detail"], b.time),
                 Condition("4-hour trend aligned (supporting)",

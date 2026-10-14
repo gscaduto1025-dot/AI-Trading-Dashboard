@@ -75,11 +75,13 @@ def _evaluate(symbol, series, mode, as_of_ts, cal, ctx_cfg) -> list[dict]:
     if mode == "day":
         _, setups = evaluate_symbol(symbol, frames, as_of, cal, ctx_cfg["strategy"], [],
                                     strategies=ctx_cfg.get("strategies"),
-                                    planning=ctx_cfg["planning"])
+                                    planning=ctx_cfg["planning"],
+                                    volume=ctx_cfg.get("volume"))
         return [s.to_dict() for s in setups]
     _, setups = evaluate_swing_symbol(symbol, frames, as_of, cal, ctx_cfg["swing"], [],
                                       strategies=ctx_cfg.get("swing_strategies"),
-                                      is_demo=False, planning=ctx_cfg["planning"])
+                                      is_demo=False, planning=ctx_cfg["planning"],
+                                      volume=ctx_cfg.get("volume"))
     return setups
 
 

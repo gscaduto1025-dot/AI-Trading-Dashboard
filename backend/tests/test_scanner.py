@@ -242,3 +242,31 @@ def test_watchlist_add_remove_validate_and_persist(tmp_path):
                   db=Database(tmp_path / "o.db"))
     with pytest.raises(Exception, match="at least one"):
         one.remove_symbol("SPY")
+
+
+def test_background_scheduler_scans_by_itself_on_each_new_candle(tmp_path):
+    """The real server loop (app lifespan), not a manual scan: it scans at startup, stays
+    idle while the 5-minute candle is forming, and rescans once it closes."""
+    import time as _time
+    clock = [datetime(2026, 3, 10, 10, 2, tzinfo=NY)]
+    market = MarketDataService(DemoSource(now=FIXED_NOW), symbols=["SPY"],
+                               now_fn=lambda: clock[0])
+    st = Settings(database_path=tmp_path / "t.db", scan_interval_seconds=1)
+    svc = Service(st, market=market, db=Database(st.database_path))
+
+    def wait_for(n: int, seconds: float = 90) -> None:
+        end = _time.monotonic() + seconds
+        while svc.scanner.scan_count < n and _time.monotonic() < end:
+            _time.sleep(0.1)
+        assert svc.scanner.scan_count >= n, f"scheduler did not reach scan {n}"
+
+    with TestClient(create_app(svc, run_scanner=True)):
+        wait_for(1)
+        first = svc.scanner.snapshot
+        assert first["trigger"] == "scheduled" and first["signature"][2] == 6
+        _time.sleep(2.5)  # several polls inside the same forming candle
+        assert svc.scanner.scan_count == 1
+        clock[0] = datetime(2026, 3, 10, 10, 5, 30, tzinfo=NY)  # 10:00-10:05 closed
+        wait_for(2)
+        assert svc.scanner.snapshot["trigger"] == "scheduled"
+        assert svc.scanner.snapshot["signature"][2] == 7

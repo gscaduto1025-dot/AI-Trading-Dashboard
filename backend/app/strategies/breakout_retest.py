@@ -69,10 +69,11 @@ class BreakoutRetest(Strategy):
                         and s * (prev.close - out_edge) <= 0
                     if not broke:
                         continue
-                    rv = tfd.relvol[i]
-                    if tfd.volume_available and rv is not None and rv < cfg.min_breakout_rel_volume:
+                    vol = tfd.volume(i)
+                    if vol.rejects(cfg.min_breakout_rel_volume):
                         weak_volume.append(f"{fmt(bar.time)} break of {label} had relative volume "
-                                           f"{rv:.2f} < {cfg.min_breakout_rel_volume}")
+                                           f"{vol.rv:.2f} < {cfg.min_breakout_rel_volume} "
+                                           f"({vol.level}, {vol.source})")
                         continue
                     phase, b = "broken", i
                     continue
@@ -97,7 +98,7 @@ class BreakoutRetest(Strategy):
                         lows = [x.low if direction == LONG else x.high for x in bars[r:i + 1]]
                         far = min(lows + [in_edge]) if direction == LONG else max(lows + [in_edge])
                         bb = bars[b]
-                        rv = tfd.relvol[b]
+                        vol = tfd.volume(b)
                         retest_px = rb.low if direction == LONG else rb.high
                         conds = [
                             Condition(f"Confirmed zone: {label}", True, True,
@@ -106,11 +107,8 @@ class BreakoutRetest(Strategy):
                                       f"{fmt(bb.time)} close {bb.close:.2f} vs edge {out_edge:.2f} "
                                       f"+ {cfg.breakout_buffer_atr} ATR", bb.time),
                             Condition(f"Breakout relative volume >= {cfg.min_breakout_rel_volume}",
-                                      None if not tfd.volume_available or rv is None
-                                      else rv >= cfg.min_breakout_rel_volume, True,
-                                      "volume unavailable on this feed"
-                                      if not tfd.volume_available or rv is None
-                                      else f"{rv:.2f}x same-time average", bb.time),
+                                      vol.passed(cfg.min_breakout_rel_volume), True,
+                                      vol.detail("same-time average"), bb.time, vol.level),
                             Condition("Retest of the broken edge", True, True,
                                       f"{fmt(rb.time)} {'low' if direction == LONG else 'high'} "
                                       f"{retest_px:.2f} within {cfg.retest_tolerance_atr} ATR of "

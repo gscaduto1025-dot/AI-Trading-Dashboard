@@ -713,7 +713,11 @@ export interface ScannerRow {
   status: StrategyStatus;
   meets_requirements: boolean;
   actionable: boolean;
-  /** TRIGGERED plans revalidated against the latest trade (see backend live_check). */
+  /** TRIGGERED: whether it is a fresh entry now (backend scanner entry_checks). */
+  signal_state: "CURRENTLY_ACTIONABLE" | "HISTORICALLY_TRIGGERED" | StrategyStatus;
+  /** Weakest verification of the signal's required volume conditions. */
+  volume_confirmation: "FULL" | "LIMITED" | "UNVERIFIED" | "UNAVAILABLE" | "NOT_REQUIRED";
+  entry_checks: { name: string; passed: boolean; detail: string }[];
   live_price: number | null;
   live_price_time: string | null;
   live_risk_reward: number | null;

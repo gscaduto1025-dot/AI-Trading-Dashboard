@@ -23,6 +23,9 @@ from datetime import datetime
 
 from ..data.base import DEFAULT_TIMEFRAME, DataError
 from ..market.calendar import NY
+from ..market.timeframes import spec
+from ..strategies.volume import (FULL, LIMITED, NOT_REQUIRED, UNAVAILABLE, UNVERIFIED,
+                                 volume_confirmation)
 
 log = logging.getLogger("tradescope.scanner")
 
@@ -57,54 +60,138 @@ def live_quote(q: dict | None) -> dict | None:
             "day_high": q.get("day_high"), "day_low": q.get("day_low")}
 
 
-def live_check(s: dict, mode: str, live: dict | None) -> list[str]:
-    """Revalidate a TRIGGERED plan against the latest trade. Triggers are confirmed on
-    completed candles (for swing setups, the previous daily or weekly close), so price may
-    have moved since: a plan is actionable only if, at the current price, the stop has not
-    been reached, the setup is not invalidated, T1 is still ahead and reward/risk from the
-    current price still meets the planning minimum. Returns the failed checks."""
+CURRENTLY_ACTIONABLE, HISTORICALLY_TRIGGERED = "CURRENTLY_ACTIONABLE", "HISTORICALLY_TRIGGERED"
+
+
+def entry_env(svc) -> dict:
+    """Facts about *now* that decide whether a trigger is still a fresh entry: the time,
+    whether the day-trading entry window is open, and the configured entry age limits."""
+    market = svc.market
+    now = market.now()
+    cal = market.calendar
+    g = svc.strategy_config.gates
+    sess = cal.last_session_started(now, "regular")
+    t = now.timestamp()
+    open_from = sess.open.timestamp() + g.entry_start_minutes * 60
+    open_until = sess.close.timestamp() - g.stop_entries_minutes_before_close * 60
+    if sess.open.timestamp() <= t < sess.close.timestamp():
+        window = open_from <= t < open_until
+        detail = (f"regular session, entries allowed {datetime.fromtimestamp(open_from, NY):%H:%M}"
+                  f"-{datetime.fromtimestamp(open_until, NY):%H:%M} ET")
+    else:
+        window, detail = False, "regular session closed (day trades are flat at the close)"
+    return {"now": int(t), "day_window": window, "day_window_detail": detail,
+            "max_age": dict(svc.planning_config.max_entry_age_candles)}
+
+
+def _check(name: str, passed: bool, detail: str) -> dict:
+    return {"name": name, "passed": passed, "detail": detail}
+
+
+def entry_checks(s: dict, mode: str, live: dict | None, env: dict | None) -> list[dict]:
+    """Recheck a TRIGGERED setup's entry conditions *now*. A trigger was confirmed on a
+    completed candle, possibly long ago; it is a fresh entry only if every check passes:
+      * the entry window is open (day trades: regular session, inside the strategy's
+        entry window);
+      * the trigger is recent: confirmed at most max_entry_age_candles candles of its
+        timeframe ago;
+      * the latest trade is inside the plan's entry zone (beyond the trigger level, not
+        chasing past the zone) - a favourable reward/risk elsewhere is not an entry;
+      * the stop (incl. today's range for swing setups), the invalidation level and T1 have
+        not been reached, and reward/risk from the live price meets the minimum;
+      * volume-dependent confirmation is not UNVERIFIED or UNAVAILABLE (IEX proxy).
+    Returns every check with its result, so the reasons are visible either way."""
     plan = s.get("plan") or {}
-    entry, stop, t1 = _num(plan, "entry"), _num(plan, "stop"), _num(plan, "target1")
-    if live is None:
-        return ["No fresh live price to revalidate the trigger against"]
-    if stop is None or t1 is None or entry is None:
-        return []  # incomplete plan: reported elsewhere (alerts: incomplete())
-    price = live["price"]
+    env = env or {}
+    tf = s["timeframe"]
     sg = 1 if s["direction"] == "LONG" else -1
     out = []
-    if sg * (price - stop) <= 0:
-        out.append(f"Live price {price:.2f} is at or beyond the stop {stop:.2f}")
-    elif mode == "swing":
-        # Today's session is not a completed candle yet, so the engine has not seen it.
-        adverse = live.get("day_low") if sg > 0 else live.get("day_high")
-        if adverse is not None and sg * (adverse - stop) <= 0:
-            out.append(f"Stop {stop:.2f} was reached intraday today ("
-                       f"{'low' if sg > 0 else 'high'} {adverse:.2f})")
+    if mode == "day":
+        out.append(_check("Entry window open", bool(env.get("day_window")),
+                          env.get("day_window_detail") or "session state unknown"))
+    max_age = (env.get("max_age") or {}).get(tf)
+    conf = s.get("confirmed_at")
+    if max_age is not None and conf:
+        if spec(tf).intraday:
+            step = spec(tf).minutes * 60
+            age = max(0, (env.get("now", conf) - conf)) / step
+            out.append(_check(f"Trigger at most {max_age} {tf} candles old", age < max_age,
+                              f"confirmed {datetime.fromtimestamp(conf, NY):%Y-%m-%d %H:%M} ET, "
+                              f"{age:.1f} candles ago"))
+        else:
+            bars = (s.get("outcome") or {}).get("bars_after_trigger")
+            ok = bars is not None and bars < max_age
+            out.append(_check(f"Trigger at most {max_age} completed {tf} candles old", ok,
+                              f"{bars} completed {tf} candle(s) since the trigger"
+                              if bars is not None else "age unknown (target already reached)"))
+    vc = s.get("volume_confirmation") or volume_confirmation(s.get("confirmation"))
+    out.append(_check("Volume confirmation verified",
+                      vc in (FULL, LIMITED, NOT_REQUIRED),
+                      {FULL: "consolidated volume", LIMITED: "LIMITED: IEX-only volume accepted "
+                       "by partial_volume_policy=limited", NOT_REQUIRED: "signal does not depend "
+                       "on volume", UNVERIFIED: "UNVERIFIED: only IEX volume is available for the "
+                       "signal candle (consolidated volume arrives 15 minutes later)",
+                       UNAVAILABLE: "UNAVAILABLE: the feed reported no volume"}.get(vc, vc)))
+    stop, t1 = _num(plan, "stop"), _num(plan, "target1")
+    zone = plan.get("entry_zone")
+    if live is None:
+        out.append(_check("Fresh live price", False, "no fresh last trade to recheck against"))
+        return out
+    price = live["price"]
+    if zone:
+        lo, hi = zone["low"], zone["high"]
+        inside = lo - 1e-9 <= price <= hi + 1e-9
+        where = ("inside" if inside else
+                 ("back through the trigger" if sg * (price - (lo if sg > 0 else hi)) < 0
+                  else "beyond the zone (chasing)"))
+        out.append(_check("Live price inside the entry zone", inside,
+                          f"{price:.2f} vs zone {lo:.2f}-{hi:.2f}: {where}"))
+    if stop is not None:
+        hit = sg * (price - stop) <= 0
+        detail = f"live {price:.2f} vs stop {stop:.2f}"
+        if not hit and mode == "swing":
+            # Today's session is not a completed candle yet, so the engine has not seen it.
+            adverse = live.get("day_low") if sg > 0 else live.get("day_high")
+            if adverse is not None and sg * (adverse - stop) <= 0:
+                hit = True
+                detail = (f"stop {stop:.2f} reached intraday today ("
+                          f"{'low' if sg > 0 else 'high'} {adverse:.2f})")
+        out.append(_check("Stop not reached", not hit, detail))
     inv = s.get("invalidation_price")
-    if inv is not None and sg * (price - inv) < 0:
-        out.append(f"Live price {price:.2f} is beyond the invalidation level {inv:.2f}; the "
-                   f"setup is cancelled if the {s['timeframe']} candle closes there")
-    if sg * (price - t1) >= 0:
-        out.append(f"Live price {price:.2f} has already reached T1 {t1:.2f}")
-    elif not out:
-        min_rr = plan.get("min_rr")
+    if inv is not None:
+        out.append(_check("Not beyond the invalidation level", sg * (price - inv) >= 0,
+                          f"live {price:.2f} vs {inv:.2f} (cancelled if the {tf} candle closes "
+                          f"beyond it)"))
+    if t1 is not None:
+        out.append(_check("T1 not reached", sg * (price - t1) < 0,
+                          f"live {price:.2f} vs T1 {t1:.2f}"))
+    if stop is not None and t1 is not None and sg * (price - stop) > 0 and sg * (t1 - price) > 0:
         rr = sg * (t1 - price) / (sg * (price - stop))
-        if min_rr is not None and rr < min_rr - 1e-9:
-            out.append(f"Reward/risk from the live price {price:.2f} is {rr:.2f}:1 "
-                       f"< {min_rr:g}:1 (entry was {entry:.2f})")
+        min_rr = plan.get("min_rr")
+        out.append(_check("Reward/risk from the live price", min_rr is None or rr >= min_rr - 1e-9,
+                          f"{rr:.2f}:1 vs minimum {min_rr:g}:1" if min_rr is not None
+                          else f"{rr:.2f}:1"))
     return out
 
 
 def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
-              data: dict, live: dict | None = None) -> dict:
-    """One scanner row, copied from an engine setup and its plan (no recalculation), plus
-    a revalidation of TRIGGERED plans against the live price (`live`, see live_check)."""
+              data: dict, live: dict | None = None, env: dict | None = None) -> dict:
+    """One scanner row, copied from an engine setup and its plan (no recalculation).
+
+    `status` is the engine's status. For TRIGGERED setups, `signal_state` separates a
+    trigger that is a fresh entry now (CURRENTLY_ACTIONABLE: every entry_checks() check
+    passes on fresh data) from one that happened but is no longer a valid entry
+    (HISTORICALLY_TRIGGERED). Only CURRENTLY_ACTIONABLE rows are `actionable`."""
     plan = s.get("plan") or {}
     trig = _num(plan, "entry_trigger")
     sgn = 1 if s["direction"] == "LONG" else -1
     status = s["status"]
     fresh = data.get("freshness") in FRESH_OK
-    live_fail = live_check(s, mode, live) if status == "TRIGGERED" else []
+    checks = entry_checks(s, mode, live, env) if status == "TRIGGERED" else []
+    live_fail = [f"{c['name']}: {c['detail']}" for c in checks if not c["passed"]]
+    actionable = status == "TRIGGERED" and fresh and not live_fail
+    state = status if status != "TRIGGERED" else (
+        CURRENTLY_ACTIONABLE if actionable else HISTORICALLY_TRIGGERED)
     issues = []
     if status == "NO_TRADE":
         issues = [c["name"] + ": " + c["detail"] for c in plan.get("checks", [])
@@ -131,7 +218,11 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
         "quality": (plan.get("quality") or {}).get("score"),
         "status": status,
         "meets_requirements": status != "NO_TRADE",
-        "actionable": status == "TRIGGERED" and fresh and not live_fail,
+        "signal_state": state,
+        "actionable": actionable,
+        "volume_confirmation": s.get("volume_confirmation")
+        or volume_confirmation(s.get("confirmation")),
+        "entry_checks": checks,
         "live_price": live["price"] if live else None,
         "live_price_time": live["time"] if live else None,
         "live_risk_reward": live_rr,
@@ -167,7 +258,8 @@ def include_row(s: dict) -> bool:
 
 
 def rank_key(r: dict):
-    return (STATUS_ORDER[r["status"]], -(r["quality"] or 0), -(r["risk_reward"] or 0),
+    return (STATUS_ORDER[r["status"]], not r.get("actionable"), -(r["quality"] or 0),
+            -(r["risk_reward"] or 0),
             r["ticker"], r["mode"], r["setup"], r["direction"])
 
 
@@ -320,6 +412,7 @@ class OpportunityScanner:
             except DataError as exc:
                 engine[mode] = {"setups": [], "symbols": {}}
                 errors.append({"symbol": "*", "mode": mode, "code": exc.code, "error": str(exc)})
+        env = entry_env(svc)
         tickers, rows = [], []
         for sym in market.symbols:
             q = quotes.get(sym) or {}
@@ -351,13 +444,17 @@ class OpportunityScanner:
                                     "direction": s["direction"], "risk_reward": s["risk_reward"],
                                     "confidence": s["confidence"]})
                 state = engine[mode]["symbols"].get(sym)
+                if state and state.get("liquidity") and "liquidity" not in info:
+                    info["liquidity"] = state["liquidity"]
+                if state and state.get("volume"):
+                    info.setdefault("volume", {})[mode] = state["volume"]
                 if state and state.get("status") == "unavailable":
                     info["flags"].append(f"{mode}: MARKET DATA UNAVAILABLE - {state.get('error')}")
                 for s in engine[mode]["setups"]:
                     if s["ticker"] != sym:
                         continue
                     row = setup_row(s, mode, info["price"], info["bias"].get(mode), data,
-                                    live_quote(q))
+                                    live_quote(q), env)
                     states.append(row)  # every evaluated setup, for the alert engine
                     if not include_row(s):
                         continue

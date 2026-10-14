@@ -11,6 +11,13 @@
     "day": 2.5
   },
   "max_conflicts": 2,
+  "partial_volume_policy": "unverified",
+  "max_entry_age_candles": {
+    "5Min": 3,
+    "15Min": 2,
+    "1Day": 3,
+    "1Week": 1
+  },
   "weights": {
     "higher_timeframe": 15,
     "level_strength": 15,
