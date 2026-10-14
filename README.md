@@ -115,6 +115,9 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
 - **Strategy engine** (`tests/test_strategies.py`): positive, negative and edge cases for each
   strategy, the gates, candle-by-candle no-repainting checks, future-candle checks,
   determinism, independence and the API.
+- **Trade-planning engine** (`tests/test_planning.py`): long/short plans, invalid stops,
+  zero risk, the 2:1 rule without moving targets, no-trade conditions, quality score, config
+  and the API.
 - **Swing engine** (`tests/test_swing.py`): positives pinned to real AAPL/GOOG daily and
   weekly events, negatives and edges on mutated real candles and hand-built paths,
   walk-forward no-repaint, future-candle and determinism checks, sorting, separate config
@@ -195,10 +198,10 @@ frontend/src/components/
 
 ### Modes and timeframes
 
-| Mode | Timeframes | Indicators | Min reward/risk |
+| Mode | Timeframes | Indicators | Min reward/risk (trade plans) |
 | --- | --- | --- | --- |
-| Day Trading | suggested 1m, 5m, 15m, 30m, 1H | EMA 9/21; on 1H or shorter, session VWAP, prior-day and opening-range levels | 1.5 : 1 |
-| Swing Trading | suggested 1H, 4H, 1D, 1W | EMA 20/50, SMA 200, 20-bar and 52-week high/low | 2.0 : 1 |
+| Day Trading | suggested 1m, 5m, 15m, 30m, 1H | EMA 9/21; on 1H or shorter, session VWAP, prior-day and opening-range levels | 2.0 : 1 (configurable) |
+| Swing Trading | suggested 1H, 4H, 1D, 1W | EMA 20/50, SMA 200, 20-bar and 52-week high/low | 2.0 : 1 (configurable) |
 
 Any timeframe can be charted in either mode. The mode only changes the analysis parameters.
 
@@ -211,9 +214,9 @@ returns a status:
 
 | Status | Meaning |
 | --- | --- |
-| **TRIGGERED** | Every strategy-specific condition was met on a *completed* candle, the candle was inside the entry window and not abnormal, and reward/risk to T1 is at least `min_rr`. |
-| **WATCHING** | The pattern is developing while the session is open (for example a breakout waiting for its retest). |
-| **NO_TRADE** | Requirements not met, with the reasons listed. |
+| **TRIGGERED** | Every strategy-specific condition was met on a *completed* candle, the candle was inside the entry window and not abnormal, and the trade plan passes every planning rule (see the trade-planning section). A trigger whose stop or T2 has since been reached is no longer an open plan and becomes NO_TRADE. |
+| **WATCHING** | The pattern is developing while the session is open, with an objective trigger level and invalidation level already known (for example a breakout waiting for its retest), and the conditional plan passes the planning rules. |
+| **NO_TRADE** | Requirements not met, with the reasons listed. A developing pattern without an objective trigger yet (an opening range still forming, price merely approaching a level) is NO_TRADE: not enough information for a plan. |
 
 Each setup returns:
 - the ticker, strategy, direction, timeframe and higher-timeframe bias;
@@ -230,6 +233,9 @@ of every accepted trigger; each new one also raises an alert).
 `backend/strategies.json`, see `strategies.example.json`). ATR is the strategy timeframe's
 14-candle ATR at the candle *before* the one being judged.
 
+Stops below are the structural invalidation levels; the planner adds the volatility buffer
+(0.1 × ATR for day trading) and picks the targets.
+
 | Strategy | Trigger (on a completed candle) | Stop / targets |
 | --- | --- | --- |
 | **Breakout & retest** | A close beyond a confirmed zone, or PDH/PDL/PWH/PWL ± 0.1 ATR, by 0.1 ATR (previous close not beyond) with relative volume ≥ 1.5 when volume exists. Within 12 candles, a wick back to within 0.15 ATR of the broken edge without closing back through. Within 3 candles, a close beyond the retest candle's high (long) or low (short). | Beyond the retest extreme and the zone, + 0.1 ATR. A close back through the zone invalidates. |
@@ -238,9 +244,8 @@ of every accepted trigger; each new one also raises an alert).
 | **Trend pullback** | The higher-timeframe bias matches the direction (daily and 1-hour close vs EMA20 vs EMA50; if they disagree it's neutral). EMA9 vs EMA20 and close vs VWAP are aligned. At least 2 consecutive lower highs into a touch of VWAP, EMA20 or a support zone (within 0.1 ATR, without closing more than 0.25 ATR through it). Then a bullish close above the prior candle's high. | Pullback low − 0.1 ATR. An indicator alone never triggers. |
 | **S/R rejection** | Price enters a zone (strength ≥ 35, or PDH/PWH, PDL/PWL) from outside without closing through it, on a pin bar (wick ≥ 2× body and ≥ 50% of the range, close in the outer 40%) or an engulfing candle. Within 2 candles, a close beyond the rejection candle's low (short) or high (long). | Beyond the rejection extreme and the zone. A close through the zone invalidates. |
 
-**Targets** (all strategies): T1 is the first key level (or strategy-specific candidate) at
-least 1R away. T2 is the next level at least 0.5R beyond T1. When no level qualifies, the
-measured fallbacks are 1.5R and 3R. Each target's basis is returned.
+**Targets** come from the trade-planning engine: T1 is the nearest confirmed key level (or a
+strategy measured move) ahead of the entry, never a multiple of risk. See below.
 
 **Gates.** No strategy triggers when any of these apply:
 - Data is stale, unavailable or fails validation.
@@ -288,31 +293,28 @@ one being judged. Counts like "10/6" mean 10 daily candles or 6 weekly candles.
 
 | Strategy | Trigger (on a completed daily/weekly close) | Stop · invalidation · targets |
 | --- | --- | --- |
-| **Daily breakout** | A support/resistance zone that existed before the candle: at least 2 confirmed swing reactions, the first one at least 10/6 candles old. The previous close was inside or below it; this candle closes beyond its far edge by 0.1 ATR. Relative volume ≥ 1.4 (vs 20 candles) when volume exists. The higher-timeframe structure must not oppose. | Stop: the zone's opposite edge ± 0.25 ATR. Invalidation: a close back through the zone. Targets: zones / 1-year extreme, else measured R. |
+| **Daily breakout** | A support/resistance zone that existed before the candle: at least 2 confirmed swing reactions, the first one at least 10/6 candles old. The previous close was inside or below it; this candle closes beyond its far edge by 0.1 ATR. Relative volume ≥ 1.4 (vs 20 candles) when volume exists. The higher-timeframe structure must not oppose. | Stop: the zone's opposite edge ± 0.25 ATR. Invalidation: a close back through the zone. Targets: daily/weekly zones and the 1-year extreme. |
 | **Trend continuation** | Established trend: EMA20 > EMA50 > EMA200 with the close beyond EMA200, plus confirmed higher highs AND higher lows (mirrored for shorts). Needs 220 daily candles; on weekly candles with fewer than 200 weeks, falls back to EMA20 vs EMA50. A pullback within 5/3 candles: the low comes within 0.3 ATR of EMA20, EMA50 or a support zone, retraces at least 1 ATR from the prior 20-candle extreme, and doesn't close more than 0.5 ATR through the level. Then a bullish candle closes above the prior candle's high. | Stop: pullback extreme ± 0.25 ATR. Invalidation: a close beyond the pullback extreme. The prior swing extreme is a target candidate. |
-| **Consolidation breakout** | The longest range of 10–40 / 6–20 candles ending at the prior candle, with height ≤ 3.5 ATR and at least 2 touches of each edge (within 0.3 ATR). A close beyond an edge by 0.1 ATR, from inside the range, with relative volume ≥ 1.3. | Stop: range midpoint (or the opposite edge) ± 0.25 ATR. Invalidation: a close back through the midpoint. Targets include 1× and 2× range-height measured moves. |
+| **Consolidation breakout** | The longest range of 10–40 / 6–20 candles ending at the prior candle, with height ≤ 3.5 ATR and at least 2 touches of each edge (within 0.3 ATR). A close beyond an edge by 0.1 ATR, from inside the range, with relative volume ≥ 1.3. | Stop: beyond the breakout candle's opposite extreme, never farther than the range midpoint (configurable: midpoint or opposite edge) ± 0.25 ATR. Invalidation: a close back through the midpoint. Targets include 1× and 2× range-height measured moves. With a midpoint stop and a 1× measured move, R:R is structurally below 2:1. |
 | **S/R reversal** | A daily or weekly zone known at the time. Price approaches from outside and trades into the zone without closing more than 0.5 ATR through it, on an objective reversal candle: hammer / shooting star (wick ≥ 1.5× body and ≥ 45% of the range, close in the outer 40%) or an engulfing candle. Then, within 2/1 candles, a close beyond the reversal candle's high (long) or low (short). | Stop: the rejection wick ± 0.25 ATR. Invalidation: a close beyond that wick. |
 | **Trend reversal** | A sequence, never one candle: (1) the confirmed structure was a downtrend (lower highs AND lower lows), (2) a close above the last lower high (break of structure, within 80/40 candles), (3) a confirmed higher low above the final lower low, not undercut since, (4) a close above the post-break high (higher high), and (5) the close is above EMA20 with EMA20 higher than 5 candles earlier. EMA20 > EMA50 is a supporting condition. Mirrored for tops. | Stop: higher low ± 0.25 ATR. Invalidation: a close beyond the higher low. |
 
-**Shared acceptance rules.** Every trigger must also pass these:
-- the trigger candle range is ≤ 4 ATR;
-- the close is ≤ 1.5 ATR past the entry trigger (no chasing);
-- the stop is on the correct side and ≤ 3 ATR away;
-- reward/risk to T1 is ≥ 2.0.
+**Strategy entry rules.** The trigger candle range must be ≤ 4 ATR, and the close must be
+≤ 1.5 ATR past the entry trigger (no chasing). Everything else (stop placement, stop width,
+targets, reward/risk, contradictions) is decided by the trade-planning engine.
 
-**Targets.** Candidates are support/resistance zones (daily, plus weekly for daily setups) and
-the 1-year extreme, all known at the time, plus any strategy-specific candidates (for
-example measured moves). T1 is the first candidate at least 1R away. T2 is the next one at
-least 1R beyond T1. When nothing qualifies, the fallbacks are 2R and 3.5R. Minor single
-swing points are not used as targets, because every small swing would cap T1 at about 1R.
+**Target candidates** are support/resistance zones (daily, plus weekly for daily setups)
+and the 1-year extreme, all known at the time, plus strategy-specific candidates such as
+measured moves. Minor single swing points are not used as swing targets.
 
 **Status.**
 - **TRIGGERED**: the latest accepted trigger is at most 3 daily (or 1 weekly) candles old,
   has not been invalidated, and has not hit its stop or T2.
-- **WATCHING**: a developing pattern with a hypothetical plan. Examples: approaching an
+- **WATCHING**: a developing pattern with a conditional plan. Examples: approaching an
   established zone, inside a qualifying range, a reversal candle awaiting confirmation, or a
-  break of structure plus higher low awaiting the higher high. A developing plan that would
-  be rejected at the trigger (R:R < 2 or stop > 3 ATR) stays NO_TRADE, with the reason.
+  break of structure plus higher low awaiting the higher high. A developing plan that the
+  planner would reject (poor R:R, stop too wide, contradictions) stays NO_TRADE, with the
+  reason and the plan shown for reference.
 - **NO_TRADE**: none of the above, or a gate applies: data unavailable/stale/invalid, fewer
   than 60 daily candles, or 20-day average dollar volume < $20M.
 
@@ -326,17 +328,7 @@ swing points are not used as targets, because every small swing would cap T1 at 
 - confirmation conditions (each pass/fail/n-a with detail) and invalidation conditions;
 - status, evidence and recent triggers (accepted or rejected, with the reason);
 - distance from the price to the entry trigger (% and ATR; negative means already beyond);
-- a **setup quality** score.
-
-**Setup quality** is a transparent 0–100 ranking aid. It is not a probability:
-
-```
-quality = 40 x share of required conditions passed
-        + 20 x share of supporting conditions passed (4H/1H, higher timeframe, ...)
-        + 15 x min(R:R / 3, 1)
-        + 15 x higher-timeframe alignment (aligned 1, neutral 0.5, opposed 0)
-        + 10 x min(reactions of the setup's zone, 5) / 5
-```
+- the complete trade plan and its **setup quality** score (see the trade-planning section).
 
 **No look-ahead, no repainting.**
 - Only candles closed by `as_of` exist; a daily candle closes at the session close (13:00 on
@@ -350,17 +342,22 @@ quality = 40 x share of required conditions passed
   deterministic. Removing the completed-candle cutoff or the swing-confirmation delay makes
   those tests fail.
 
-**Tests** (`tests/test_swing.py`, 26 tests). Positive cases are pinned to real events and
-re-checked from the raw CSV rows:
+**Tests** (`tests/test_swing.py`, 28 tests). Triggered positives are pinned to real events
+and re-checked from the raw CSV rows:
 
-| Strategy | Real event |
+| Strategy | Real event (TRIGGERED under the default 2:1 plan) |
 | --- | --- |
-| Daily breakout | AAPL's post-earnings breakout, 2017-02-01 |
-| Consolidation breakdown | AAPL on Brexit day, 2016-06-24 |
-| S/R reversal | AAPL, 2016-10-24, including a check that it was only pending on the reversal candle's own close |
-| Trend continuation | AAPL downtrend, 2016-02-11 |
-| Weekly breakdown | GOOG, week of 2008-10-06 |
+| Daily breakout | GOOG, 2008-01-31 (T1 is a confirmed daily zone) |
+| Weekly breakout | GOOG, week of 2008-04-14 (T1 is the 1-year high) |
+| S/R reversal | GOOG, 2006-03-20, including a check that it was only pending on the reversal candle's own close |
+| Trend continuation | AAPL downtrend, 2016-07-13 |
 | Trend reversal | GOOG, 2005-08-10, plus a hand-built downtrend → break → higher low → higher high path |
+| Consolidation breakout | a hand-built range and breakout (measured-move T1, breakout-candle stop) |
+
+Two famous moves are detected as patterns but correctly planned as NO_TRADE, because a
+confirmed zone sits just ahead of the entry:
+- AAPL's post-earnings breakout on 2017-02-01: resistance about 0.8 above the entry, R:R ≈ 0.2.
+- AAPL's Brexit-day range breakdown on 2016-06-24: support just below.
 
 Negative and edge cases:
 - a forming candle;
@@ -377,22 +374,22 @@ Every accepted trigger in the AAPL 2015–17 and GOOG 2004–13 fixtures, follow
 
 ```
 strategy                     tf     signals accepted T1 first stopped  open  avg R
-Consolidation breakout       1Day        48        2        0       2     0  -1.00
+Consolidation breakout       1Day        48        2        2       0     0   4.05
 Consolidation breakout       1Week       13        0        0       0     0   0.00
-Daily breakout               1Day       111       27        7      19     1   0.06
-Daily breakout               1Week       12        5        1       3     1  -0.01
-Support/resistance reversal  1Day       124       15        6       9     0   0.27
-Support/resistance reversal  1Week       14        3        2       1     0   1.02
-Trend continuation           1Day       116       27       10      17     0   0.20
-Trend continuation           1Week       27       14        3       8     3   0.02
-Trend reversal               1Day        24        3        0       3     0  -1.00
+Daily breakout               1Day       111        8        2       6     0   0.12
+Daily breakout               1Week       12        2        1       1     0   0.75
+Support/resistance reversal  1Day       124        3        1       2     0   0.23
+Support/resistance reversal  1Week       14        2        1       1     0   0.86
+Trend continuation           1Day       116        3        0       3     0  -1.00
+Trend continuation           1Week       27        1        1       0     0   2.05
+Trend reversal               1Day        24        1        0       1     0  -1.00
 Trend reversal               1Week        2        0        0       0     0   0.00
 ```
 
-- These are two stocks and small samples. They ignore costs, slippage and gaps, and they
-  are **not evidence of an edge**.
-- The shared R:R ≥ 2 and stop-width rules reject most raw pattern signals.
-- Consolidation breakouts and trend reversals are rare under these definitions.
+- These are two stocks and tiny samples (24 accepted triggers in total). They ignore
+  costs, slippage and gaps, and they are **not evidence of an edge**.
+- With T1 at the nearest confirmed level (never moved), the 2:1 minimum rejects most raw
+  pattern signals: a confirmed zone usually sits close to the breakout or pullback.
 
 **Dashboard.** Switching to **Swing Trading** changes:
 - the chart's default timeframe (1D);
@@ -407,13 +404,142 @@ draws the following:
 - the entry zone band, trigger, stop, T1 and T2;
 - the setup levels and evidence markers.
 
-It also opens the **Swing Setup Detail** panel. Switching back to Day Trading restores the
+It also opens the setup's **Trade Plan** (with a **Setup details** tab). Switching back to Day Trading restores the
 day-trading panel and clears the selection.
 
 API: `GET /api/swing/setups[?symbol=&as_of=&sort=quality|ticker|strategy|direction|risk_reward|distance]`
 and `GET /api/swing/config` (thresholds plus each strategy's rule text). Fresh accepted swing
 triggers are written to the same immutable signal log (`/api/strategies/signals`) and raise
 `swing` alerts.
+
+### Trade-planning and risk engine (`backend/app/planning`)
+
+Every day-trading and swing-trading setup goes through one shared, rules-based planner.
+Strategies only report objective facts: the trigger level a completed candle must close
+beyond, the structural level that invalidates the idea, the supporting levels and the
+confirmation conditions. The planner turns those into a complete conditional plan, or
+explains why there is none. It never invents an entry, never moves a target to satisfy
+the reward/risk threshold, and never returns TRIGGERED without a confirmed trigger.
+
+**Plan fields:**
+
+| Group | Fields |
+| --- | --- |
+| Identity | ticker, direction, strategy, status |
+| Entry | entry trigger, entry price or entry zone |
+| Exits | stop-loss, target 1, target 2 |
+| Risk | risk per share, reward per share (T1 and T2), reward/risk (T1, T2 and at the worst fill in the entry zone) |
+| Conditions | confirmation requirements, invalidation conditions |
+| Audit | every planning check (pass / fail / pending), the calculations as formulas, the quality score with its components |
+
+Every price carries a `basis` sentence that explains it.
+
+**Entries** are objective conditions, never arbitrary prices:
+- Examples: a close beyond the retest candle (breakout & retest), the first close beyond the opening range, a reversal candle closing back above a swept level, a bullish close above the prior candle's high after a pullback, a close beyond a rejection candle, a close beyond the post-break high (structure shift).
+- TRIGGERED: the entry is the confirmation candle's close.
+- WATCHING: the plan is priced at the trigger level and is conditional on the close.
+- Entry zone: from the trigger to 0.25 × ATR (day) or 0.5 × ATR (swing) beyond it, or to the confirmation close if that is farther. Fills beyond it count as chasing.
+
+**Stops** are the strategy's invalidation level plus a volatility buffer (0.1 × ATR day,
+0.25 × ATR swing):
+- below the retest low / zone (breakout & retest);
+- the opening-range midpoint or opposite side (ORB);
+- beyond the sweep extreme (sweep);
+- the pullback low (trend pullback, trend continuation);
+- beyond the rejection wick (rejections and reversals);
+- beyond the broken zone (swing breakout);
+- beyond the breakout candle, capped at the range midpoint (consolidation);
+- the higher low / lower high (trend reversal).
+
+**Targets** are the nearest confirmed levels ahead of the entry. Candidates:
+- day trading: zones, prior day/week high/low, swing levels and liquidity areas from the key-level engine;
+- swing trading: daily/weekly zones and the 1-year extreme;
+- strategy measured moves (opening-range or consolidation height).
+
+Selection:
+- T1 is the nearest candidate at least 0.05 ATR beyond the entry. A level right in front of the entry is an obstacle, so it caps the trade instead of being skipped.
+- T2 is the next candidate at least 0.25 ATR beyond T1.
+- Only when no candidate lies ahead (price beyond every known level) is an ATR projection used: entry ± 2 ATR (day) or 3 ATR (swing), then T1 ± 1 / 1.5 ATR for T2. The basis says so.
+- Targets are chosen without looking at the stop, so they can never be tuned to reach a ratio.
+
+**Reward/risk**: risk = |entry − stop|, reward = |target − entry|, R:R = reward ÷ risk.
+The default minimum is 2:1 to T1, configurable globally and per mode. A plan below it is
+NO_TRADE with the numbers shown.
+
+**NO_TRADE conditions** (each reported as a failed check, with an explanation):
+- stale, unavailable or invalid data, or failed gates (liquidity, data gaps, abnormal opening gap);
+- insufficient candle history (no ATR);
+- a quoted bid/ask spread wider than 0.25% (day) / 0.75% (swing) when a quote is available. Bars-only feeds report the spread as unknown rather than assuming it is fine.
+- no valid technical setup / no objective trigger, or no structural invalidation level;
+- invalid stop placement (the invalidation level is not on the loss side of the entry);
+- zero risk (stop equals entry) or negligible risk (< 0.05 ATR), so R:R is never divided by zero;
+- a stop wider than 3 ATR;
+- reward/risk below the minimum;
+- contradictory signals: 2 or more conflicts. Conflicts for trend-following strategies:
+  - the higher-timeframe trend opposes the trade (daily, 1-hour, weekly or 4-hour, by mode);
+  - an opposite-direction trigger on the same ticker and timeframe (all strategies).
+
+  Reversal strategies trade against the prior trend by design, so an opposing trend is
+  scored lower but not counted as a conflict.
+- a strategy entry rule rejected the trigger candle (entry window, abnormal candle, chasing);
+- a required confirmation condition failed;
+- a day trigger that already reached its stop or T2, or a swing trigger that is stale, invalidated or resolved.
+
+**Setup quality score** (0–100). This is a transparent ranking of supporting evidence. It is
+**not a predicted win probability**.
+
+| Component | Weight | Full points when |
+| --- | --- | --- |
+| Higher-timeframe alignment | 15 | aligned (neutral = half, opposed = 0) |
+| Strength of supporting levels | 15 | key-level strength 100/100 (swing zones: 5+ reactions); unrated = half |
+| Price-action confirmation | 20 | every required confirmation condition passed |
+| Relative volume | 10 | ≥ 1.5× average (0.5× = 0; unavailable = half) |
+| Trend structure | 15 | swing structure / EMA alignment agrees with the trade (mixed = half) |
+| Available risk/reward | 25 | R:R to T1 ≥ 2 × the minimum (linear below) |
+| Conflicting evidence | −10 each | (penalty) |
+
+**Configuration**: `app/planning/config.py`, overridden by `backend/planning.json` or
+`PLANNING_CONFIG_PATH` (see `planning.example.json`). Unknown keys are rejected and the
+weights must sum to 100.
+
+**API**:
+- `GET /api/plans/{symbol}?mode=day|swing[&as_of=]`: every plan for a symbol, active plans first.
+- `GET /api/planning/config`: rules and weights.
+- Each setup in `/api/strategies/setups` and `/api/swing/setups` also carries its `plan`. The setup's status and numbers are exactly the plan's.
+- The Claude explanation receives the plans. Its verdict is capped by the best plan status: NO_TRADE → NO_TRADE, WATCHING → WAIT at most.
+
+**Dashboard**: the right sidebar is now the **Trade Plan** panel. It shows the following:
+- every price with its basis;
+- the per-share risk and reward, and the reward/risk ratios;
+- the formulas;
+- every planning check;
+- the confirmation and invalidation conditions;
+- the quality breakdown.
+
+With no setup selected, it lists the current symbol's plans (best first). Clicking a setup
+in either scanner opens its plan, with a **Setup details** tab for the strategy evidence. The
+chart draws the plan's trigger, entry zone, entry, stop and targets.
+
+**Tests** (`tests/test_planning.py`, 26 tests) cover the following:
+- long and short plans checked by hand;
+- WATCHING plans;
+- invalid stop placement for both directions;
+- zero and negligible risk;
+- stops that are too wide;
+- the "target not moved" rule (a nearer level caps the trade even when a farther one would give 4:1);
+- configurable and per-mode minimums, plus the exact-threshold case;
+- ATR projections only when nothing lies ahead;
+- stale data and missing history;
+- no setup;
+- contradictions and spreads;
+- strategy rejections and missing confirmation;
+- quality weights and bounds;
+- config validation;
+- that both engines publish exactly their plan's numbers;
+- the API.
+
+Deliberately reintroducing target skipping (ignoring levels within 1 ATR) makes the
+"target not moved" test fail.
 
 ### Key-level engine (`backend/app/levels`)
 
@@ -514,27 +640,20 @@ reference implementations. They also check that adding future candles changes no
 swings and breakouts aren't confirmed early, split detection, and hand-computed intraday
 fixtures for the opening range, VWAP and breakout timing.
 
-### Setup engine
+### Market bias and legacy setup scan (`backend/app/analysis`)
 
 - **Market bias** scores up to six factors (price vs slow EMA, fast vs slow EMA, slow EMA
   slope, RSI, price vs VWAP or SMA200, swing structure), each with an ATR dead-band so flat
-  markets read as neutral.
-- **Detectors**: breakout/breakdown through a key level (with the bias), trend pullback into
-  an EMA or level, and reversal at a level with stretched RSI plus a hammer or engulfing candle.
-- **Trade plan**: the entry is the trigger price, the stop sits beyond the level or pullback
-  extreme, and the targets are the next levels in the trade direction, or 2R/3R when no level
-  exists.
-- **Status**:
-  - **ACTIONABLE**: the trigger fired on a closed bar and every required check passes.
-  - **FORMING**: the pattern is present but it's waiting on the trigger or on one required
-    condition.
-  - **NO TRADE**: no pattern, reward/risk too low, the move is already extended past the
-    entry ("don't chase"), or too many conditions are missing. The panel explains why and
-    which levels to watch.
-- **Claude** gets the engine's numbers and explains them. It may not invent prices. The
-  backend also enforces that its verdict is never more aggressive than the engine's status.
-  Responses are cached in SQLite per bar so repeat views don't cost API calls. The request
-  uses server-side refusal fallbacks (`fallbacks: "default"`).
+  markets read as neutral. It feeds the Market Bias panel and Claude's context.
+- The original single-pattern detector (ACTIONABLE / FORMING / NO TRADE) still powers the
+  watchlist scan history ("Recently detected setups") and its alerts. It no longer drives
+  the dashboard's trade plans, the chart's plan lines or Claude's verdict cap; the
+  trade-planning engine does.
+- **Claude** gets the bias, key levels and the trade plans, and explains them. It may not
+  invent prices. The backend enforces that its verdict is never more aggressive than the
+  best plan status. Responses are cached in SQLite per bar and plan state so repeat views
+  don't cost API calls. The request uses server-side refusal fallbacks
+  (`fallbacks: "default"`).
 
 ### Alerts
 
@@ -557,6 +676,8 @@ notifications for actionable setups.
 | GET | `/api/strategies/config` · `/api/strategies/signals` | strategy thresholds and rules · immutable trigger log |
 | GET | `/api/swing/setups[?symbol=&as_of=&sort=quality]` | swing-trading scanner (daily/weekly; sortable) |
 | GET | `/api/swing/config` | swing strategy thresholds and rules |
+| GET | `/api/plans/{symbol}?mode=day\|swing[&as_of=]` | complete trade plans for a symbol (active first) |
+| GET | `/api/planning/config` | trade-planning rules, thresholds and quality weights |
 | GET | `/api/levels/{symbol}?mode=day&timeframe=5Min[&as_of=2026-03-05T12:00]` | automatic key levels with evidence, strength, validity (point-in-time replay with `as_of`) |
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |

@@ -4,6 +4,8 @@ Overrides: SWING_STRATEGY_CONFIG_PATH or backend/swing_strategies.json, shaped l
 `to_dict()`; unknown keys are rejected. "ATR" is Wilder's 14-candle ATR on the strategy's
 own timeframe (daily or weekly) at the candle before the one being judged. Values keyed by
 timeframe ({"1Day": .., "1Week": ..}) are counted in that timeframe's candles.
+Entry zones, stop buffers, targets, stop-width limits and the minimum reward/risk are
+trade-planning rules shared with the day engine: app/planning/config.py.
 """
 
 from __future__ import annotations
@@ -27,19 +29,7 @@ class SwingGates:
     min_daily_history: int = 220  # EMA200 needs history; trend strategies require it
     max_trigger_range_atr: float = 4.0  # a trigger candle wider than this is abnormal
     max_extension_atr: float = 1.5  # entry candle may close at most this far past the trigger
-    max_risk_atr: float = 3.0  # entry-to-stop distance above this x ATR is too wide
     max_trigger_age: dict = _per_tf(3, 1)  # a trigger stays actionable this many candles
-
-
-@dataclass(frozen=True)
-class SwingTargets:
-    min_rr: float = 2.0
-    min_target_r: float = 1.0
-    t2_extra_r: float = 1.0
-    fallback_t1_r: float = 2.0
-    fallback_t2_r: float = 3.5
-    stop_buffer_atr: float = 0.25
-    entry_zone_atr: float = 0.5  # potential entry zone: trigger .. trigger + 0.5 ATR
 
 
 @dataclass(frozen=True)
@@ -72,7 +62,9 @@ class ConsolidationBreakout:
     edge_tolerance_atr: float = 0.3
     breakout_buffer_atr: float = 0.1
     min_rel_volume: float = 1.3
-    stop_mode: str = "midpoint"  # "midpoint" or "opposite"
+    # "breakout_candle": beyond the breakout candle's opposite extreme (failed breakout),
+    # never farther than the range midpoint; "midpoint"; or "opposite" side of the range.
+    stop_mode: str = "breakout_candle"
     measured_move_multiples: tuple = (1.0, 2.0)
 
 
@@ -99,7 +91,6 @@ class TrendReversal:
 @dataclass(frozen=True)
 class SwingConfig:
     gates: SwingGates = field(default_factory=SwingGates)
-    targets: SwingTargets = field(default_factory=SwingTargets)
     daily_breakout: DailyBreakout = field(default_factory=DailyBreakout)
     trend_continuation: TrendContinuation = field(default_factory=TrendContinuation)
     consolidation_breakout: ConsolidationBreakout = field(default_factory=ConsolidationBreakout)

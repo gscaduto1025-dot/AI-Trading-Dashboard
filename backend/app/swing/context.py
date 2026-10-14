@@ -21,6 +21,7 @@ from ..levels.engine import InsufficientData, compute_key_levels
 from ..levels.model import SWING_K, Swing
 from ..market.calendar import NY, MarketCalendar
 from ..market.timeframes import bar_end, spec
+from ..planning.config import PlanningConfig
 from .config import SwingConfig
 
 
@@ -137,6 +138,7 @@ class SwingContext:
     key_levels: list[dict]
     levels_note: str | None
     gate_reasons: list[str]
+    planning: PlanningConfig = field(default_factory=PlanningConfig)
 
     def htf(self, tf: str, i: int) -> dict:
         """Higher-timeframe context for candle i of `tf`, using only closed candles.
@@ -191,7 +193,8 @@ class SwingContext:
 
 def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                         cal: MarketCalendar, cfg: SwingConfig,
-                        data_problems: list[str] | None = None) -> SwingContext:
+                        data_problems: list[str] | None = None,
+                        planning: PlanningConfig | None = None) -> SwingContext:
     as_ts = int(as_of.timestamp())
     tfs = {tf: build_tf(tf, frames.get(tf, []), cal, as_ts) for tf in ("1Day", "1Week")
            if frames.get(tf)}
@@ -215,4 +218,5 @@ def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: dateti
         levels = report["levels"]
     except InsufficientData as exc:
         note = f"Key levels unavailable: {exc}"
-    return SwingContext(ticker, as_of, cal, cfg, tfs, support, levels, note, gate)
+    return SwingContext(ticker, as_of, cal, cfg, tfs, support, levels, note, gate,
+                        planning or PlanningConfig())

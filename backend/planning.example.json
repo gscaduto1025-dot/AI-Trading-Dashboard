@@ -1,0 +1,22 @@
+{
+  "min_rr": 2.0,
+  "min_rr_by_mode": {
+    "day": 1.8
+  },
+  "stop_buffer_atr": {
+    "day": 0.1,
+    "swing": 0.25
+  },
+  "max_risk_atr": {
+    "day": 2.5
+  },
+  "max_conflicts": 2,
+  "weights": {
+    "higher_timeframe": 15,
+    "level_strength": 15,
+    "price_action": 20,
+    "relative_volume": 10,
+    "trend_structure": 15,
+    "risk_reward": 25
+  }
+}

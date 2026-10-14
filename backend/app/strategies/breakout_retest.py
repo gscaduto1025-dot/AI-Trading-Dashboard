@@ -17,7 +17,7 @@ LONG (SHORT mirrors with support):
 
 from __future__ import annotations
 
-from .base import Strategy, StrategyResult, accept, sgn
+from .base import Strategy, StrategyResult, accept, ref, sgn
 from .common import LONG, Condition, StrategyContext, TFData, fmt, level_ref
 
 REF_TYPES = ("PDH", "PDL", "PWH", "PWL")
@@ -96,7 +96,6 @@ class BreakoutRetest(Strategy):
                     if s * (bar.close - extreme) > 0:
                         lows = [x.low if direction == LONG else x.high for x in bars[r:i + 1]]
                         far = min(lows + [in_edge]) if direction == LONG else max(lows + [in_edge])
-                        stop = far - s * ctx.config.targets.stop_buffer_atr * atr
                         bb = bars[b]
                         rv = tfd.relvol[b]
                         retest_px = rb.low if direction == LONG else rb.high
@@ -124,10 +123,15 @@ class BreakoutRetest(Strategy):
                               {"time": rb.time, "kind": "retest", "price": retest_px},
                               {"time": bar.time, "kind": "confirmation", "price": bar.close}]
                         inv = [f"A close {'below' if direction == LONG else 'above'} {in_edge:.2f} "
-                               f"(back through {label}) invalidates the breakout.",
-                               f"Stop {stop:.2f}: beyond the retest extreme and the zone."]
-                        res.triggers.append(accept(ctx, tfd, i, direction, bar.close, stop, conds,
-                                                   ev, [level_ref(z["level"])], inv))
+                               f"(back through {label}) invalidates the breakout."]
+                        trig = ref(extreme, f"{tfd.tf} close {'above' if direction == LONG else 'below'} "
+                                            f"the retest candle {'high' if direction == LONG else 'low'} "
+                                            f"{extreme:.2f} ({fmt(rb.time)})", "retest", tfd.tf)
+                        anchor = ref(far, f"Beyond the retest {'low' if direction == LONG else 'high'} "
+                                          f"and the far edge of {label} ({far:.2f})", "zone", tfd.tf)
+                        res.triggers.append(accept(ctx, tfd, i, direction, trig, anchor, conds,
+                                                   ev, [level_ref(z["level"])], inv,
+                                                   strategy_id=self.id))
                         phase, b, r = "pre", None, None
             # Developing state at the latest candle.
             if phase in ("broken", "retested"):
@@ -136,6 +140,12 @@ class BreakoutRetest(Strategy):
                     bb = bars[b]
                     pending = ("retest of the broken edge" if phase == "broken" else
                                "a close beyond the retest candle")
+                    if phase == "retested":
+                        rb_ = bars[r]
+                        rx = rb_.high if direction == LONG else rb_.low
+                        fx = min(rb_.low, in_edge) if direction == LONG else max(rb_.high, in_edge)
+                    else:
+                        rx, fx = out_edge, in_edge
                     latest_watch = {
                         "time": t,
                         "reasons": [f"{'Broke above' if direction == LONG else 'Broke below'} "
@@ -152,6 +162,13 @@ class BreakoutRetest(Strategy):
                         "levels": [level_ref(z["level"])],
                         "invalidation": [f"A close {'below' if direction == LONG else 'above'} "
                                          f"{in_edge:.2f} cancels the setup."],
+                        # Conditional plan: retested -> close beyond the retest candle;
+                        # broken -> priced at the broken edge, where the retest is expected.
+                        "trigger": ref(rx, f"{tfd.tf} close {'above' if direction == LONG else 'below'} "
+                                           f"{'the retest candle extreme' if phase == 'retested' else 'the broken edge after a retest'} "
+                                           f"{rx:.2f}", "retest", tfd.tf),
+                        "stop_anchor": ref(fx, f"Far edge of {label} / retest extreme ({fx:.2f})",
+                                           "zone", tfd.tf),
                     }
         res.watch = latest_watch
         if not res.triggers and not latest_watch:

@@ -15,7 +15,7 @@ An indicator being bullish never triggers on its own: steps 3-5 are required.
 
 from __future__ import annotations
 
-from .base import Strategy, StrategyResult, accept, sgn
+from .base import Strategy, StrategyResult, accept, ref, sgn
 from .common import LONG, Condition, StrategyContext, TFData, fmt, level_ref
 
 
@@ -101,7 +101,6 @@ class TrendPullback(Strategy):
                 continue
             extreme = min(x.low for x in bars[t:i + 1]) if direction == LONG else \
                 max(x.high for x in bars[t:i + 1])
-            stop = extreme - s * ctx.config.targets.stop_buffer_atr * atr
             sess_ext = max(x.high for x in bars[tfd.start:i]) if direction == LONG else \
                 min(x.low for x in bars[tfd.start:i])
             conds = [
@@ -128,11 +127,18 @@ class TrendPullback(Strategy):
             lv = [{"label": name, "type": "DYNAMIC", "low": px, "high": px, "timeframe": tfd.tf,
                    "strength": None}]
             lv += [level_ref(z) for z in ctx.zones() if z["label"] == name]
-            inv = [f"Stop {stop:.2f} below the pullback low." if direction == LONG else
-                   f"Stop {stop:.2f} above the pullback high.",
+            inv = [f"A move {'below the pullback low' if direction == LONG else 'above the pullback high'} "
+                   f"{extreme:.2f} invalidates the pullback.",
                    f"A close {'below' if direction == LONG else 'above'} {name} weakens the trend."]
-            res.triggers.append(accept(ctx, tfd, i, direction, b.close, stop, conds, ev, lv, inv,
-                                       [(sess_ext, "session extreme")]))
+            pref = prev.high if direction == LONG else prev.low
+            trig = ref(pref, f"{tfd.tf} {'bullish' if direction == LONG else 'bearish'} close "
+                             f"{'above' if direction == LONG else 'below'} the prior candle "
+                             f"{'high' if direction == LONG else 'low'} {pref:.2f}", "candle", tfd.tf)
+            anchor = ref(extreme, f"Pullback {'low' if direction == LONG else 'high'} "
+                                  f"{extreme:.2f} (into {name})", "pullback", tfd.tf)
+            res.triggers.append(accept(ctx, tfd, i, direction, trig, anchor, conds, ev, lv, inv,
+                                       [(sess_ext, f"session {'high' if direction == LONG else 'low'} (swing level)")],
+                                       strategy_id=self.id))
             used_touches.add(t)
         # Developing: aligned trend and price pulling back near VWAP/EMA20.
         i = sess[-1]
@@ -151,7 +157,17 @@ class TrendPullback(Strategy):
                                              htf["detail"]),
                                    Condition("Pullback touch", False, True, "approaching"),
                                    Condition("Price-action confirmation", False, True, "pending")],
-                    "levels": [], "invalidation": []}
+                    "levels": [],
+                    "invalidation": [f"A move {'below' if direction == LONG else 'above'} "
+                                     f"{near[0][0]} {near[0][1]:.2f}."],
+                    "trigger": ref(b.high if direction == LONG else b.low,
+                                   f"{tfd.tf} {'bullish' if direction == LONG else 'bearish'} close "
+                                   f"{'above' if direction == LONG else 'below'} the latest candle "
+                                   f"{'high' if direction == LONG else 'low'} "
+                                   f"{(b.high if direction == LONG else b.low):.2f}", "candle", tfd.tf),
+                    "stop_anchor": ref(min(b.low, near[0][1]) if direction == LONG else max(b.high, near[0][1]),
+                                       f"Below {near[0][0]} / the pullback low" if direction == LONG
+                                       else f"Above {near[0][0]} / the pullback high", "pullback", tfd.tf)}
         if not res.triggers and not res.watch:
             res.reasons.append(last_reason or "No qualifying pullback and confirmation.")
         return res

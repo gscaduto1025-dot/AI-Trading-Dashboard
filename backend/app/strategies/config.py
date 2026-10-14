@@ -2,7 +2,9 @@
 
 Every threshold a strategy uses lives here. Defaults can be overridden with a JSON file
 (STRATEGY_CONFIG_PATH, or backend/strategies.json if present) shaped like `to_dict()`:
-{"gates": {...}, "targets": {...}, "breakout_retest": {...}, ...}. Unknown keys are rejected.
+{"gates": {...}, "breakout_retest": {...}, ...}. Unknown keys are rejected.
+Entry, stop buffer, targets and the minimum reward/risk are trade-planning rules shared
+with the swing engine: see app/planning/config.py (backend/planning.json).
 ATR always means Wilder's 14-candle ATR on the strategy's own timeframe at the candle
 *before* the one being judged (so a candle never sizes its own buffer).
 """
@@ -31,16 +33,6 @@ class Gates:
     entry_start_minutes: int = 5  # no triggers on the first candle(s) after 09:30
     stop_entries_minutes_before_close: int = 30  # early-close days honoured
     min_session_bars: int = 2
-
-
-@dataclass(frozen=True)
-class Targets:
-    min_rr: float = 1.5  # reward to target 1 / risk
-    min_target_r: float = 1.0  # T1 is the first level at least this many R away
-    t2_extra_r: float = 0.5  # T2 is the next level at least this far beyond T1
-    fallback_t1_r: float = 1.5  # measured targets when no level qualifies
-    fallback_t2_r: float = 3.0
-    stop_buffer_atr: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -104,7 +96,6 @@ class SRRejection:
 @dataclass(frozen=True)
 class StrategyConfig:
     gates: Gates = field(default_factory=Gates)
-    targets: Targets = field(default_factory=Targets)
     breakout_retest: BreakoutRetest = field(default_factory=BreakoutRetest)
     opening_range_breakout: OpeningRangeBreakout = field(default_factory=OpeningRangeBreakout)
     liquidity_sweep: LiquiditySweep = field(default_factory=LiquiditySweep)

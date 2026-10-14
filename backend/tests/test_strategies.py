@@ -3,12 +3,12 @@ determinism, independence and gate tests. Fixtures are described in strategy_fix
 (previous day high PDH = 101, low PDL = 99, 5-minute ATR ~0.42, daily ATR ~0.84)."""
 
 import json
-from dataclasses import replace
 from datetime import datetime
 
 import pytest
 
 from app.market.calendar import NY
+from app.planning.config import PlanningConfig
 from app.strategies.common import NO_TRADE, TRIGGERED, WATCHING
 from app.strategies.config import StrategyConfig
 from tests.strategy_fixtures import (DAY, after_bars, bar_time, frames, pick, run, t)
@@ -37,7 +37,9 @@ def test_breakout_retest_triggers_on_confirmation_close():
     assert s.trigger_time == bar_time(6) and s.confirmed_at == bar_time(7)
     assert s.entry == pytest.approx(101.7)
     assert 100.8 < s.stop < 101.0  # below the zone (PDH 101 - 0.1 ATR) by a 0.1 ATR buffer
-    assert s.target1 > s.entry and s.risk_reward >= 1.5
+    # No level lies above this session, so T1 is an ATR projection (stated in its basis).
+    assert s.target1 > s.entry and s.risk_reward >= 1.0
+    assert "ATR projection" in s.plan["target1"]["basis"]
     assert required_ok(s)
     names = [c.name for c in s.confirmation]
     for needle in ("Confirmed zone", "closed beyond the zone", "relative volume", "Retest",
@@ -87,15 +89,30 @@ ORB = [(100, 100.4, 100, 100.3, 3000), (100.3, 100.8, 100.2, 100.6, 2000),   # r
        (100.7, 100.95, 100.65, 100.86, 2500)]                                # 4 breakout
 
 
-def test_orb_long_triggers_with_measured_targets():
-    s = pick(run(ORB)[1], "opening_range_breakout", "LONG")
+ORB_DOWN = [(100.5, 100.8, 100.4, 100.6, 3000), (100.6, 100.7, 100.0, 100.2, 2000),  # 100-100.8
+            (100.2, 100.5, 100.1, 100.4, 1500), (100.4, 100.5, 100.1, 100.2, 1000),
+            (100.2, 100.25, 99.85, 99.9, 2500)]                                # 4 breakdown
+
+
+def test_orb_short_triggers_with_measured_targets():
+    s = pick(run(ORB_DOWN, trend="down")[1], "opening_range_breakout", "SHORT")
     assert s.status == TRIGGERED and s.trigger_time == bar_time(4)
-    assert s.entry == pytest.approx(100.86)
-    assert s.target1 == pytest.approx(100.86 + 0.8)  # 1x range (PDH 101 is < 1R away)
-    assert s.target2 == pytest.approx(100.86 + 1.6)
-    assert 100.3 < s.stop < 100.4  # range midpoint 100.4 - 0.1 ATR
+    assert s.entry == pytest.approx(99.9)
+    assert s.target1 == pytest.approx(99.9 - 0.8)  # 1x range measured move (nearest ahead)
+    assert s.target2 == pytest.approx(99.9 - 1.6)
+    assert 100.4 < s.stop < 100.5  # range midpoint 100.4 + 0.1 ATR
     assert s.supporting_levels[0]["low"] == 100 and s.supporting_levels[0]["high"] == 100.8
     assert required_ok(s)
+
+
+def test_orb_long_into_pdh_is_no_trade_target_not_moved():
+    """The breakout closes 0.14 below PDH 101: PDH is the first target, so reward/risk is
+    poor. The plan reports that instead of skipping PDH for a farther measured move."""
+    s = pick(run(ORB)[1], "opening_range_breakout", "LONG")
+    assert s.status == NO_TRADE
+    assert s.plan["target1"]["price"] == pytest.approx(101.0)
+    assert "Previous day high" in s.plan["target1"]["basis"]
+    assert any("Poor risk/reward" in r and "not moved" in r for r in s.reasons)
 
 
 def test_orb_opposite_direction_is_no_trade():
@@ -103,15 +120,17 @@ def test_orb_opposite_direction_is_no_trade():
     assert s.status == NO_TRADE and "first confirmed breakout was up" in s.reasons[0]
 
 
-def test_orb_watching_while_range_forms():
+def test_orb_no_trade_while_range_forms():
+    # The range edge (the entry trigger) is not defined yet: insufficient information.
     s = pick(run(ORB[:2])[1], "opening_range_breakout", "LONG")
-    assert s.status == WATCHING and "forming" in s.reasons[0]
+    assert s.status == NO_TRADE and "forming" in s.reasons[0]
+    assert "no objective entry trigger" in s.reasons[0]
 
 
 def test_orb_30_minute_range_is_configurable():
     cfg = StrategyConfig().with_overrides({"opening_range_breakout": {"range_minutes": 30}})
     s = pick(run(ORB, cfg=cfg)[1], "opening_range_breakout", "LONG")
-    assert s.status == WATCHING  # 5 of 6 range candles so far
+    assert s.status == NO_TRADE  # 5 of 6 range candles so far: range still forming
     assert "30 minutes" in s.reasons[0]
 
 
@@ -182,12 +201,25 @@ PULLBACK = [(101.5, 101.52, 101.25, 101.3, 900), (101.3, 101.35, 101.05, 101.1, 
 CONFIRM = [(100.95, 101.4, 100.92, 101.35, 1400)]  # bullish close above prior high
 
 
+LOW_RR = PlanningConfig(min_rr=0.3)  # isolates the pattern rules from the session-high target
+
+
 def test_trend_pullback_triggers_with_htf_alignment():
-    s = pick(run(RALLY + PULLBACK + CONFIRM)[1], "trend_pullback", "LONG")
+    s = pick(run(RALLY + PULLBACK + CONFIRM, planning=LOW_RR)[1], "trend_pullback", "LONG")
     assert s.status == TRIGGERED and s.trigger_time == bar_time(13)
     assert s.htf_bias["label"] == "bullish"
     assert any("touched session VWAP" in c.name for c in s.confirmation)
     assert s.stop < 100.78 and required_ok(s)
+
+
+def test_trend_pullback_below_session_high_is_poor_reward_risk():
+    """Valid pattern, but the session high 101.55 sits 0.20 above the 101.35 entry with
+    ~0.60 of risk: T1 is that swing level and the plan is NO_TRADE."""
+    s = pick(run(RALLY + PULLBACK + CONFIRM)[1], "trend_pullback", "LONG")
+    assert s.status != TRIGGERED
+    [t] = s.triggers_today
+    assert not t["accepted"] and t["target1"] == pytest.approx(101.55)
+    assert "Poor risk/reward" in t["blocked"] and "session high" in t["blocked"]
 
 
 def test_trend_pullback_blocked_when_htf_is_bearish():
@@ -204,8 +236,11 @@ def test_bullish_indicators_alone_do_not_trigger():
 
 def test_htf_requirement_is_configurable():
     cfg = StrategyConfig().with_overrides({"trend_pullback": {"require_htf_alignment": False}})
-    s = pick(run(RALLY + PULLBACK + CONFIRM, trend="down", cfg=cfg)[1], "trend_pullback", "LONG")
+    s = pick(run(RALLY + PULLBACK + CONFIRM, trend="down", cfg=cfg, planning=LOW_RR)[1],
+             "trend_pullback", "LONG")
     assert s.status == TRIGGERED
+    # Still recorded as a conflicting signal and scored lower.
+    assert any("daily trend is bearish" in c for c in s.plan["conflicts"])
 
 
 # --------------------------------------------------------- 5. support/resistance rejection
@@ -329,7 +364,10 @@ def test_strategies_are_independent():
         "opening_range_breakout", "liquidity_sweep", "trend_pullback", "sr_rejection")})
     alone = run(LONG_DAY, cfg=only)[1]
     assert {s.strategy for s in alone} == {"breakout_retest"}
-    assert {s.id: s.to_dict() for s in alone} == full
+    # Detection is independent; only the shared plan layer sees other strategies' signals
+    # (an opposite-direction trigger on the same timeframe counts as a conflicting signal).
+    strip = lambda d: {k: v for k, v in d.items() if k != "plan"}
+    assert {s.id: strip(s.to_dict()) for s in alone} == {k: strip(v) for k, v in full.items()}
 
 
 def test_every_setup_has_the_required_fields():
@@ -353,7 +391,8 @@ def test_config_rejects_unknown_keys():
         StrategyConfig().with_overrides({"opening_range_breakout": {"range_mins": 15}})
     with pytest.raises(ValueError):
         StrategyConfig().with_overrides({"nonsense": {}})
-    assert replace(StrategyConfig().targets, min_rr=2.0).min_rr == 2.0
+    assert "targets" not in StrategyConfig().to_dict()  # planning rules live in PlanningConfig
+    assert PlanningConfig().min_rr == 2.0
 
 
 # ------------------------------------------------------------------------------ API

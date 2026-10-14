@@ -10,8 +10,12 @@ LONG (SHORT mirrors):
  * Breakout confirmation: candle i closes above range high + breakout_buffer_atr x ATR,
    the previous close was inside the range, relative volume >= min_rel_volume when
    volume exists.
- * Entry trigger = range high. Stop = range midpoint (stop_mode "midpoint") or range low
-   ("opposite") - stop_buffer_atr x ATR. Invalidation: a close back below the midpoint.
+ * Entry trigger = range high. Stop anchor (stop_mode): "breakout_candle" (default) - the
+   breakout candle's low, but never below the range midpoint (a move back through the
+   breakout candle = failed breakout); "midpoint"; or "opposite" (range low). The planner
+   subtracts the volatility buffer. Invalidation: a close back below the midpoint.
+   Note: with a midpoint stop and a 1x measured-move T1, reward/risk is structurally
+   below 2:1, so those plans are NO_TRADE by the planner's default rule.
  * Targets: levels known at the time plus measured moves range high + m x height.
 """
 
@@ -57,6 +61,30 @@ class ConsolidationBreakout(SwingStrategy):
                 {"label": "Range midpoint", "type": "RANGE_MID", "low": round(r["mid"], 4),
                  "high": round(r["mid"], 4), "timeframe": d.tf, "strength": None}]
 
+    @staticmethod
+    def _anchor(r: dict, candle, direction: str, cfg) -> tuple[float, str]:
+        """Structural stop anchor; `candle` is the breakout candle (or, for a developing
+        setup, the latest candle the breakout will start from)."""
+        if cfg.stop_mode == "breakout_candle":
+            if direction == LONG:
+                p = max(candle.low, r["mid"])
+                return p, (f"Breakout candle low {candle.low:.2f}" if p == candle.low else
+                           f"Range midpoint {p:.2f} (breakout candle low is deeper)")
+            p = min(candle.high, r["mid"])
+            return p, (f"Breakout candle high {candle.high:.2f}" if p == candle.high else
+                       f"Range midpoint {p:.2f} (breakout candle high is higher)")
+        if cfg.stop_mode == "midpoint":
+            return r["mid"], ConsolidationBreakout._anchor_basis(r, direction, cfg)
+        p = r["low"] if direction == LONG else r["high"]
+        return p, ConsolidationBreakout._anchor_basis(r, direction, cfg)
+
+    @staticmethod
+    def _anchor_basis(r: dict, direction: str, cfg) -> str:
+        if cfg.stop_mode == "midpoint":
+            return f"Range midpoint {r['mid']:.2f} (a close back there fails the breakout)"
+        return (f"Opposite side of the range ({'low' if direction == LONG else 'high'} "
+                f"{r['low'] if direction == LONG else r['high']:.2f})")
+
     def evaluate(self, ctx: SwingContext, d: SwingTF, direction: str, start: int) -> SwingResult:
         cfg = ctx.config.consolidation_breakout
         s = sgn(direction)
@@ -64,7 +92,6 @@ class ConsolidationBreakout(SwingStrategy):
         bars = d.bars
         n = len(bars)
         weak: list[str] = []
-        buf = ctx.config.targets.stop_buffer_atr
         for i in range(max(start, cfg.min_bars[d.tf] + 15), n):
             b, p = bars[i], bars[i - 1]
             r = find_range(d, i, cfg)
@@ -81,9 +108,7 @@ class ConsolidationBreakout(SwingStrategy):
                 weak.append(f"{fmt_day(b.time)} broke the {r['bars']}-candle range on relative "
                             f"volume {rv:.2f} < {cfg.min_rel_volume}")
                 continue
-            base = r["mid"] if cfg.stop_mode == "midpoint" else \
-                (r["low"] if direction == LONG else r["high"])
-            stop = base - s * buf * atr
+            base, base_why = self._anchor(r, b, direction, cfg)
             htf = ctx.htf(d.tf, i)
             sup = ctx.supporting(d.end[i])
             conds = [
@@ -114,23 +139,27 @@ class ConsolidationBreakout(SwingStrategy):
             extras = [(edge + s * m * r["height"], f"measured move {m:g}x range height")
                       for m in cfg.measured_move_multiples]
             res.triggers.append(accept(
-                ctx, d, i, direction, edge, stop, conds,
+                ctx, d, i, direction, edge, base, conds,
                 [{"time": b.time, "kind": "range breakout close", "price": b.close},
                  {"time": bars[r["start"]].time, "kind": "range start", "price": edge}],
                 self._levels(d, r),
                 [f"A close back {'below' if direction == LONG else 'above'} the range midpoint "
-                 f"{r['mid']:.2f} invalidates the breakout."], r["mid"], extras))
+                 f"{r['mid']:.2f} invalidates the breakout."], r["mid"], extras,
+                trigger_basis=f"{fmt_day(b.time)} close {'above the range high' if direction == LONG else 'below the range low'} "
+                              f"{edge:.2f} ({r['bars']}-candle range, by {cfg.breakout_buffer_atr} ATR)",
+                anchor_basis=base_why, strategy_id=self.id))
         # Developing: the latest candles form a range and price is still inside it.
         if n > cfg.min_bars[d.tf] + 15:
             r = find_range(d, n, cfg)
             c = bars[-1].close
             if r and r["low"] <= c <= r["high"]:
                 edge = r["high"] if direction == LONG else r["low"]
-                base = r["mid"] if cfg.stop_mode == "midpoint" else \
-                    (r["low"] if direction == LONG else r["high"])
+                base, base_why = self._anchor(r, bars[-1], direction, cfg)
+                if cfg.stop_mode == "breakout_candle":
+                    base_why += " (planned from the latest candle; recomputed on the breakout candle)"
                 atr = r["atr"]
                 res.watch = watch_plan(
-                    ctx, d, direction, edge, base - s * buf * atr,
+                    ctx, d, direction, edge, base,
                     [Condition("Consolidation", True, True,
                                f"{r['bars']} candles {r['low']:.2f}-{r['high']:.2f} "
                                f"({r['height'] / atr:.2f} ATR)"),
@@ -145,7 +174,10 @@ class ConsolidationBreakout(SwingStrategy):
                     self._levels(d, r),
                     [f"After a breakout, a close back through the midpoint {r['mid']:.2f}."],
                     [(edge + s * m * r["height"], f"measured move {m:g}x range height")
-                     for m in cfg.measured_move_multiples])
+                     for m in cfg.measured_move_multiples],
+                    trigger_basis=f"Completed close {'above the range high' if direction == LONG else 'below the range low'} "
+                                  f"{edge:.2f} ({r['bars']}-candle range) with volume",
+                    anchor_basis=base_why, strategy_id=self.id)
         if not res.triggers and not res.watch:
             res.reasons.append("No qualifying consolidation range with a completed breakout.")
         res.reasons += weak[-2:]

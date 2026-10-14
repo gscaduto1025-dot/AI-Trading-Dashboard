@@ -18,7 +18,7 @@ SHORT at resistance (LONG mirrors at support):
 
 from __future__ import annotations
 
-from .base import Strategy, StrategyResult, accept, sgn
+from .base import Strategy, StrategyResult, accept, ref, sgn
 from .breakout_retest import REF_TYPES
 from .common import LONG, Condition, StrategyContext, TFData, candle_metrics, fmt, level_ref
 
@@ -95,7 +95,6 @@ class SRRejection(Strategy):
                     if s * (b.close - extreme) > 0:
                         atr = tfd.atr_before(i)
                         top = max(rb.high, far) if direction != LONG else min(rb.low, far)
-                        stop = top - s * ctx.config.targets.stop_buffer_atr * atr
                         conds = [
                             Condition(f"Confirmed zone: {label}", True, True,
                                       f"{z['low']:.2f}-{z['high']:.2f}"),
@@ -113,12 +112,15 @@ class SRRejection(Strategy):
                         ev = [{"time": rb.time, "kind": "rejection", "price": rb.close},
                               {"time": b.time, "kind": "confirmation", "price": b.close}]
                         inv = [f"A close {'below' if direction == LONG else 'above'} {far:.2f} "
-                               f"(through {label}) invalidates the rejection.",
-                               f"Stop {stop:.2f}."]
-                        vw = tfd.vwap[i]
-                        res.triggers.append(accept(ctx, tfd, i, direction, b.close, stop, conds,
+                               f"(through {label}) invalidates the rejection."]
+                        trig = ref(extreme, f"{tfd.tf} close {'above' if direction == LONG else 'below'} "
+                                            f"the rejection candle {'high' if direction == LONG else 'low'} "
+                                            f"{extreme:.2f} ({fmt(rb.time)})", "rejection", tfd.tf)
+                        anchor = ref(top, f"Beyond the rejection wick and the far edge of {label} "
+                                          f"({top:.2f})", "zone", tfd.tf)
+                        res.triggers.append(accept(ctx, tfd, i, direction, trig, anchor, conds,
                                                    ev, [level_ref(z["level"])], inv,
-                                                   [(vw, "session VWAP")] if vw else []))
+                                                   strategy_id=self.id))
                         pending = None
                         continue
                     if i - pending >= cfg.confirm_window_bars:
@@ -144,7 +146,15 @@ class SRRejection(Strategy):
                                                  fmt(rb.time)),
                                        Condition("Direction confirmed", False, True, "pending")],
                         "levels": [level_ref(z["level"])], "invalidation": [
-                            f"A close {'below' if direction == LONG else 'above'} {far:.2f}."]}
+                            f"A close {'below' if direction == LONG else 'above'} {far:.2f}."],
+                        "trigger": ref(rb.high if direction == LONG else rb.low,
+                                       f"{tfd.tf} close {'above' if direction == LONG else 'below'} the "
+                                       f"rejection candle {'high' if direction == LONG else 'low'} "
+                                       f"{(rb.high if direction == LONG else rb.low):.2f}", "rejection",
+                                       tfd.tf),
+                        "stop_anchor": ref(min(rb.low, far) if direction == LONG else max(rb.high, far),
+                                           f"Beyond the rejection wick and the far edge of {label}",
+                                           "zone", tfd.tf)}
             else:
                 last = bars[sess[-1]]
                 probe = last.low if direction == LONG else last.high

@@ -23,6 +23,7 @@ from ..data.base import Bar
 from ..levels.engine import InsufficientData, compute_key_levels
 from ..market.calendar import NY, MarketCalendar, SessionDay
 from ..market.timeframes import bar_end, spec
+from ..planning.config import PlanningConfig
 from .config import StrategyConfig
 
 WATCHING, TRIGGERED, NO_TRADE = "WATCHING", "TRIGGERED", "NO_TRADE"
@@ -66,15 +67,17 @@ class TriggerEvent:
     confirmed_at: int  # its close
     entry: float
     stop: float
-    target1: float
-    target2: float
-    risk_reward: float
+    target1: float | None
+    target2: float | None
+    risk_reward: float | None
     targets_basis: list[str]
     conditions: list[Condition]
     evidence: list[dict]
     levels: list[dict]
     invalidation: list[str]
-    blocked: str | None = None  # gate / R:R reason the trigger was not accepted
+    blocked: str | None = None  # why the trade plan rejected this trigger (None = accepted)
+    plan_input: object | None = None  # planning.PlanInput the plan was built from
+    plan: dict | None = None  # planning.build_plan output at the trigger
 
     def key(self) -> tuple:
         return (self.time, round(self.entry, 4), round(self.stop, 4))
@@ -108,6 +111,7 @@ class Setup:
     outcome: dict | None = None
     targets_basis: list[str] = field(default_factory=list)
     triggers_today: list[dict] = field(default_factory=list)
+    plan: dict | None = None  # complete conditional trade plan (planning engine)
 
     @property
     def id(self) -> str:
@@ -173,6 +177,7 @@ class StrategyContext:
     daily_atr: float
     gate_reasons: list[str]
     daily_bias: dict
+    planning: PlanningConfig = field(default_factory=PlanningConfig)
     _hourly_ema20: list[float | None] = field(default_factory=list)
     _hourly_ema50: list[float | None] = field(default_factory=list)
 
@@ -291,7 +296,8 @@ def build_tf(tf: str, bars: list[Bar], session: SessionDay, cal: MarketCalendar,
 
 def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                   cal: MarketCalendar, cfg: StrategyConfig,
-                  data_problems: list[str] | None = None) -> StrategyContext:
+                  data_problems: list[str] | None = None,
+                  planning: PlanningConfig | None = None) -> StrategyContext:
     as_ts = int(as_of.timestamp())
     session = cal.last_session_started(as_of, "regular")
     session_open = as_of < session.close
@@ -349,7 +355,8 @@ def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                         f"({daily_atr:.2f})")
 
     ctx = StrategyContext(ticker, as_of, cal, cfg, session, session_open, tfs, daily, hourly,
-                          hourly_end, levels, note, daily_atr or 0.0, gate, daily_bias)
+                          hourly_end, levels, note, daily_atr or 0.0, gate, daily_bias,
+                          planning or PlanningConfig())
     hc = [b.close for b in hourly]
     ctx._hourly_ema20, ctx._hourly_ema50 = ind.ema(hc, 20), ind.ema(hc, 50)
     return ctx
@@ -357,43 +364,20 @@ def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
 
 # ------------------------------------------------------------ targets & outcome
 
-def level_prices(ctx: StrategyContext, direction: str, entry: float) -> list[tuple[float, str]]:
-    """Key-level prices beyond `entry` in the trade direction (zones by their near edge)."""
+def level_target_candidates(ctx: StrategyContext, direction: str) -> list:
+    """Confirmed key levels (zones, prior day/week references, swings, liquidity) as target
+    candidates; zones are entered through their near edge (low for longs, high for shorts).
+    Only levels known at the session open are used."""
+    from ..planning.plan import PriceRef
     out = []
     for l in ctx.levels:
         if not l["valid"] or l["category"] not in ("zone", "reference", "swing", "liquidity"):
             continue
-        if direction == LONG:
-            p = l["low"] if l["is_zone"] else l["price"]
-            if p > entry:
-                out.append((p, l["label"]))
-        else:
-            p = l["high"] if l["is_zone"] else l["price"]
-            if p < entry:
-                out.append((p, l["label"]))
+        p = (l["low"] if direction == LONG else l["high"]) if l["is_zone"] else l["price"]
+        strength = l["strength"]["score"]
+        out.append(PriceRef(p, f"{l['label']} {p:.2f} ({l['timeframe']}, strength "
+                               f"{strength}/100)", l["type"], l["timeframe"], strength))
     return out
-
-
-def compute_targets(ctx: StrategyContext, direction: str, entry: float, stop: float,
-                    extra: list[tuple[float, str]] | None = None
-                    ) -> tuple[float, float, float, list[str]]:
-    """T1 = first candidate >= min_target_r R away; T2 = next >= t2_extra_r R beyond T1.
-    Candidates: key levels beyond entry plus strategy extras; measured R fallbacks."""
-    t = ctx.config.targets
-    risk = abs(entry - stop)
-    sign = 1 if direction == LONG else -1
-    cands = level_prices(ctx, direction, entry) + list(extra or [])
-    cands = sorted(((p, why) for p, why in cands if (p - entry) * sign > 0),
-                   key=lambda x: (x[0] - entry) * sign)
-    t1 = next(((p, w) for p, w in cands if (p - entry) * sign >= t.min_target_r * risk), None)
-    if t1 is None:
-        t1 = (entry + sign * t.fallback_t1_r * risk, f"measured {t.fallback_t1_r}R (no level)")
-    t2 = next(((p, w) for p, w in cands if (p - t1[0]) * sign >= t.t2_extra_r * risk), None)
-    if t2 is None:
-        t2 = (entry + sign * max(t.fallback_t2_r * risk, abs(t1[0] - entry) + t.t2_extra_r * risk),
-              f"measured {t.fallback_t2_r}R (no further level)")
-    rr = abs(t1[0] - entry) / risk if risk > 0 else 0.0
-    return t1[0], t2[0], rr, [f"T1 {t1[0]:.2f}: {t1[1]}", f"T2 {t2[0]:.2f}: {t2[1]}"]
 
 
 def outcome_after(tfd: TFData, i: int, direction: str, stop: float, t1: float,
@@ -440,5 +424,5 @@ def hhmm_to_ts(ctx: StrategyContext, hhmm: str) -> int:
 
 
 __all__ = ["Condition", "TriggerEvent", "Setup", "TFData", "StrategyContext", "build_context",
-           "compute_targets", "outcome_after", "candle_metrics", "level_ref", "fmt", "fmt_full",
+           "level_target_candidates", "outcome_after", "candle_metrics", "level_ref", "fmt", "fmt_full",
            "signal_id", "WATCHING", "TRIGGERED", "NO_TRADE", "LONG", "SHORT"]

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from ..levels.detect import find_swings
 from ..levels.model import SWING_K
-from .base import Strategy, StrategyResult, accept, sgn
+from .base import Strategy, StrategyResult, accept, ref, sgn
 from .common import (LONG, Condition, StrategyContext, TFData, candle_metrics, fmt,
                      level_ref)
 
@@ -121,7 +121,6 @@ class LiquiditySweepReversal(Strategy):
                     (b.close < b.open and m["close_pos"] <= cfg.confirm_close_position)
                 if back_inside and reversal:
                     sb = bars[swept_i]
-                    stop = extreme - s * ctx.config.targets.stop_buffer_atr * atr
                     conds = [
                         Condition(f"Previously confirmed level: {lv['label']}", True, True,
                                   f"{L:.2f}"),
@@ -139,13 +138,16 @@ class LiquiditySweepReversal(Strategy):
                     ]
                     ev = [{"time": sb.time, "kind": "sweep", "price": extreme},
                           {"time": b.time, "kind": "reversal close", "price": b.close}]
-                    vw = tfd.vwap[i]
-                    extra = [(vw, "session VWAP")] if vw is not None else []
-                    inv = [f"Stop {stop:.2f} beyond the sweep extreme {extreme:.2f}.",
+                    inv = [f"A move beyond the sweep extreme {extreme:.2f} invalidates the reversal.",
                            f"A close back {'below' if direction == LONG else 'above'} {L:.2f} "
                            f"negates the reversal."]
-                    res.triggers.append(accept(ctx, tfd, i, direction, b.close, stop, conds, ev,
-                                               [lv["ref"]], inv, extra))
+                    trig = ref(L, f"{tfd.tf} reversal candle closing back "
+                                  f"{'above' if direction == LONG else 'below'} the swept "
+                                  f"{lv['label']} {L:.2f}", "sweep", tfd.tf)
+                    anchor = ref(extreme, f"Sweep extreme {extreme:.2f} ({fmt(sb.time)})",
+                                 "sweep", tfd.tf)
+                    res.triggers.append(accept(ctx, tfd, i, direction, trig, anchor, conds, ev,
+                                               [lv["ref"]], inv, strategy_id=self.id))
                     done = True
             # Developing state.
             last = bars[sess[-1]]
@@ -158,7 +160,13 @@ class LiquiditySweepReversal(Strategy):
                         "conditions": [Condition("Price traded beyond the level", True, True, fmt(t)),
                                        Condition("Close back inside + reversal candle", False, True,
                                                  "pending")],
-                        "levels": [lv["ref"]], "invalidation": []}
+                        "levels": [lv["ref"]],
+                        "invalidation": [f"A move beyond the sweep extreme {extreme:.2f}."],
+                        "trigger": ref(L, f"{tfd.tf} reversal candle closing back "
+                                          f"{'above' if direction == LONG else 'below'} "
+                                          f"{lv['label']} {L:.2f}", "sweep", tfd.tf),
+                        "stop_anchor": ref(extreme, f"Sweep extreme {extreme:.2f}", "sweep",
+                                           tfd.tf)}
             elif swept_i is None and not done:
                 dist = (last.low - L) if direction == LONG else (L - last.high)
                 atr = tfd.atr_before(sess[-1])

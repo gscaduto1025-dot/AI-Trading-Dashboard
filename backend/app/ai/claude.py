@@ -26,15 +26,21 @@ Rules:
 - Use only the numbers provided. Never invent prices, levels, news, earnings dates or other \
 facts that are not in the input.
 - Your verdict may be more cautious than the engine's status, never more aggressive. If the \
-engine says NO_TRADE, your verdict is NO_TRADE. If it says FORMING, your verdict is WAIT or \
-NO_TRADE. Only an ACTIONABLE engine status can receive TAKE_SETUP, and only if you agree.
+engine says NO_TRADE, your verdict is NO_TRADE. If it says FORMING or WATCHING, your verdict is \
+WAIT or NO_TRADE. Only an ACTIONABLE or TRIGGERED status can receive TAKE_SETUP, and only if \
+you agree.
 - Saying there is no trade is a good outcome when conditions are unclear; say so plainly.
 - Be specific: reference the actual entry, stop, targets, levels and checklist items.
 - Point out what would invalidate the idea and what would need to change for a better setup.
 - analysis.key_levels lists automatically detected levels with evidence. Their strength
 scores are heuristic rankings of supporting evidence, not probabilities of a reversal; never
 describe them as odds or likelihoods.
-- analysis.strategy_setups lists the rule-based strategy scanner's active setups for this symbol in the selected mode (day trading or swing trading). Reference them by strategy name; never upgrade a WATCHING setup to triggered, and never invent a setup that is not listed.
+- analysis.strategy_setups lists the trade-planning engine's plans for this symbol in the \
+selected mode (day or swing trading), each with entry trigger, entry, stop, targets and the \
+basis for every number. analysis.plan_status is the best plan status and caps your verdict: \
+NO_TRADE -> NO_TRADE; WATCHING -> WAIT or NO_TRADE; TRIGGERED -> any verdict. Reference plans \
+by strategy name, never change their numbers, never upgrade WATCHING to triggered, and never \
+invent a setup that is not listed.
 - If the input says the data is DEMO DATA, state in the summary that the analysis is based on \
 simulated demo data and is not a real market read.
 - This is educational analysis, not financial advice. Do not tell the user to buy or sell; \
@@ -58,7 +64,9 @@ OUTPUT_SCHEMA = {
 }
 
 _VERDICT_CAP = {"NO_TRADE": {"NO_TRADE"}, "FORMING": {"WAIT", "NO_TRADE"},
-                "ACTIONABLE": {"TAKE_SETUP", "WAIT", "NO_TRADE"}}
+                "WATCHING": {"WAIT", "NO_TRADE"},
+                "ACTIONABLE": {"TAKE_SETUP", "WAIT", "NO_TRADE"},
+                "TRIGGERED": {"TAKE_SETUP", "WAIT", "NO_TRADE"}}
 
 
 class AIUnavailable(Exception):
@@ -92,7 +100,8 @@ class ClaudeAnalyst:
         payload = build_prompt_payload(analysis, recent_bars, is_demo)
         user_text = (
             f"Explain this {analysis['mode']}-trading analysis of {analysis['symbol']} on the "
-            f"{analysis['timeframe']} timeframe. Engine status: {analysis['setup']['status']}.\n\n"
+            f"{analysis['timeframe']} timeframe. Trade-plan status: "
+            f"{analysis.get('plan_status') or analysis['setup']['status']}.\n\n"
             f"<analysis_json>\n{json.dumps(payload, separators=(',', ':'))}\n</analysis_json>"
         )
         kwargs: dict = dict(
@@ -136,7 +145,10 @@ class ClaudeAnalyst:
             raise AIUnavailable("Claude returned an unexpected format.") from exc
 
         # Enforce the "never more aggressive than the engine" rule.
-        allowed = _VERDICT_CAP.get(analysis["setup"]["status"], {"NO_TRADE"})
+        # The trade-planning engine is authoritative; the legacy setup status is the
+        # fallback only when no plan status was supplied.
+        status = analysis.get("plan_status") or analysis["setup"]["status"]
+        allowed = _VERDICT_CAP.get(status, {"NO_TRADE"})
         if result.get("verdict") not in allowed:
             result["verdict"] = "WAIT" if "WAIT" in allowed else "NO_TRADE"
         result["model"] = response.model

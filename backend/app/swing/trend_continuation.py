@@ -110,7 +110,6 @@ class TrendContinuation(SwingStrategy):
                 continue
             pull_ext = min(x.low for x in bars[t:i + 1]) if direction == LONG else \
                 max(x.high for x in bars[t:i + 1])
-            stop = pull_ext - s * ctx.config.targets.stop_buffer_atr * atr
             trigger = prev.high if direction == LONG else prev.low
             sup = ctx.supporting(d.end[i])
             conds = [
@@ -133,14 +132,19 @@ class TrendContinuation(SwingStrategy):
                           f"4H {sup.get('4Hour', 'n/a')}, 1H {sup.get('1Hour', 'n/a')}"),
             ]
             res.triggers.append(accept(
-                ctx, d, i, direction, trigger, stop, conds,
+                ctx, d, i, direction, trigger, pull_ext, conds,
                 [{"time": bars[t].time, "kind": f"pullback to {name}", "price": px},
                  {"time": b.time, "kind": "confirmation close", "price": b.close}],
                 [{"label": name, "type": "DYNAMIC" if name.startswith("EMA") else "ZONE",
                   "low": px, "high": px, "timeframe": d.tf, "strength": None}],
                 [f"A close {'below' if direction == LONG else 'above'} the pullback "
                  f"{'low' if direction == LONG else 'high'} {pull_ext:.2f} ends the setup."],
-                pull_ext, [(extreme, "prior swing extreme")]))
+                pull_ext, [(extreme, f"prior swing {'high' if direction == LONG else 'low'}")],
+                trigger_basis=f"{fmt_day(b.time)} {'bullish' if direction == LONG else 'bearish'} close "
+                              f"{'above' if direction == LONG else 'below'} the prior candle "
+                              f"{'high' if direction == LONG else 'low'} {trigger:.2f}",
+                anchor_basis=f"Pullback {'low' if direction == LONG else 'high'} {pull_ext:.2f} "
+                             f"(into {name})", strategy_id=self.id))
             used.add(t)
         # Developing: trend intact and price pulling back to EMA20/EMA50.
         if n > 25:
@@ -155,10 +159,9 @@ class TrendContinuation(SwingStrategy):
                 if near:
                     nm, px = near[0]
                     trig = c.high if direction == LONG else c.low
-                    stop = min(c.low, px) - atr * ctx.config.targets.stop_buffer_atr if direction == LONG \
-                        else max(c.high, px) + atr * ctx.config.targets.stop_buffer_atr
+                    anchor = min(c.low, px) if direction == LONG else max(c.high, px)
                     res.watch = watch_plan(
-                        ctx, d, direction, trig, stop,
+                        ctx, d, direction, trig, anchor,
                         [Condition("Established trend", True, True, f"{d.ema_stack(i)}; {st['label']}"),
                          Condition(f"Pullback into {nm}", True, True, f"{px:.2f}"),
                          Condition("Confirmation candle", False, True,
@@ -167,7 +170,11 @@ class TrendContinuation(SwingStrategy):
                          f"{'bullish' if direction == LONG else 'bearish'} close beyond {trig:.2f}."],
                         [{"label": nm, "type": "DYNAMIC", "low": px, "high": px, "timeframe": d.tf,
                           "strength": None}],
-                        [f"A close beyond the pullback extreme {stop:.2f}."])
+                        [f"A close beyond the pullback extreme {anchor:.2f}."],
+                        trigger_basis=f"{'Bullish' if direction == LONG else 'Bearish'} close "
+                                      f"{'above' if direction == LONG else 'below'} the latest candle "
+                                      f"{'high' if direction == LONG else 'low'} {trig:.2f}",
+                        anchor_basis=f"Pullback extreme / {nm} {anchor:.2f}", strategy_id=self.id)
             else:
                 last_reason = f"No established trend now: {why}."
         if not res.triggers and not res.watch:

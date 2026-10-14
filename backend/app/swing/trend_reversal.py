@@ -76,7 +76,6 @@ class TrendReversal(SwingStrategy):
         bars = d.bars
         n = len(bars)
         lookback = cfg.lookback[d.tf]
-        buf = ctx.config.targets.stop_buffer_atr
         breaks = self._breaks(d, direction)
         used: set[tuple[int, int]] = set()
         old_word = "downtrend" if direction == LONG else "uptrend"
@@ -102,8 +101,6 @@ class TrendReversal(SwingStrategy):
             shift = e20 is not None and e20_prev is not None and s * (b.close - e20) > 0 \
                 and s * (e20 - e20_prev) > 0
             e50 = d.ema50[i]
-            atr = d.atr_before(i)
-            stop = pv.price - s * buf * atr
             st = brk["structure"]
             sup = ctx.supporting(d.end[i])
             conds = [
@@ -134,7 +131,7 @@ class TrendReversal(SwingStrategy):
                           f"4H {sup.get('4Hour', 'n/a')}, 1H {sup.get('1Hour', 'n/a')}"),
             ]
             trig = accept(
-                ctx, d, i, direction, post, stop, conds,
+                ctx, d, i, direction, post, pv.price, conds,
                 [{"time": brk["swing"].time, "kind": f"last {old_word} swing {brk['swing'].kind}",
                   "price": brk["level"]},
                  {"time": bars[brk["c"]].time, "kind": "break of structure",
@@ -147,9 +144,12 @@ class TrendReversal(SwingStrategy):
                  {"label": pv_word.capitalize(), "type": "SWING", "low": round(pv.price, 4),
                   "high": round(pv.price, 4), "timeframe": d.tf, "strength": None}],
                 [f"A close {'below' if direction == LONG else 'above'} the {pv_word} "
-                 f"{pv.price:.2f} invalidates the reversal."], pv.price)
-            if cfg.require_ema_shift and not shift and trig.blocked is None:
-                trig.blocked = "no moving-average shift (EMA20 not turning with price)"
+                 f"{pv.price:.2f} invalidates the reversal."], pv.price,
+                trigger_basis=f"{fmt_day(b.time)} close {'above' if direction == LONG else 'below'} the "
+                              f"post-break {'high' if direction == LONG else 'low'} {post:.2f} "
+                              f"({new_word})",
+                anchor_basis=f"Confirmed {pv_word} {pv.price:.2f} ({fmt_day(pv.time)})",
+                strategy_id=self.id)
             res.triggers.append(trig)
         # Developing: break of structure + higher low confirmed, waiting for the higher high.
         if n > 30:
@@ -159,9 +159,8 @@ class TrendReversal(SwingStrategy):
                 got = self._setup_at(d, brk, n, direction)
                 if got and s * (bars[-1].close - got[1]) <= 0:
                     pv, post = got
-                    atr = d.atr_before(n)
                     res.watch = watch_plan(
-                        ctx, d, direction, post, pv.price - s * buf * atr,
+                        ctx, d, direction, post, pv.price,
                         [Condition(f"Prior {old_word}", True, True, brk["structure"]["label"]),
                          Condition("Break of structure", True, True,
                                    f"{fmt_day(bars[brk['c']].time)} beyond {brk['level']:.2f}"),
@@ -175,7 +174,10 @@ class TrendReversal(SwingStrategy):
                         [{"label": f"Post-break {'high' if direction == LONG else 'low'}",
                           "type": "SWING", "low": round(post, 4), "high": round(post, 4),
                           "timeframe": d.tf, "strength": None}],
-                        [f"A close {'below' if direction == LONG else 'above'} {pv.price:.2f}."])
+                        [f"A close {'below' if direction == LONG else 'above'} {pv.price:.2f}."],
+                        trigger_basis=f"Close {'above' if direction == LONG else 'below'} the post-break "
+                                      f"{'high' if direction == LONG else 'low'} {post:.2f} ({new_word})",
+                        anchor_basis=f"Confirmed {pv_word} {pv.price:.2f}", strategy_id=self.id)
                 elif not got:
                     res.reasons.append(
                         f"Structure broke on {fmt_day(bars[brk['c']].time)} but no confirmed "

@@ -13,6 +13,7 @@ import type {
   RecordedSetup,
   SessionKind,
   StrategyEvaluation,
+  PlansResponse,
   SwingEvaluation,
   SwingSortKey,
 } from "./types";
@@ -89,6 +90,7 @@ export const api = {
   levels: (symbol: string, mode: Mode, timeframe: string) =>
     request<KeyLevelReport>(`/api/levels/${symbol}?${q({ mode, timeframe })}`),
   strategySetups: () => request<StrategyEvaluation>("/api/strategies/setups"),
+  plans: (symbol: string, mode: Mode) => request<PlansResponse>(`/api/plans/${symbol}?${q({ mode })}`),
   swingSetups: (sort: SwingSortKey = "quality") => request<SwingEvaluation>(`/api/swing/setups?${q({ sort })}`),
   ai: (symbol: string, mode: Mode, timeframe: string, refresh = false) =>
     request<AIResult>(`/api/ai/${symbol}?${q({ mode, timeframe, refresh })}`, { method: "POST" }),

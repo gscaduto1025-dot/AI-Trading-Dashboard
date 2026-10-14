@@ -79,15 +79,18 @@ class DailyBreakout(SwingStrategy):
                           if "4Hour" in sup else None, False, f"4H {sup.get('4Hour', 'n/a')}, "
                           f"1H {sup.get('1Hour', 'n/a')}"),
             ]
-            stop = far(z) - s * ctx.config.targets.stop_buffer_atr * atr
             res.triggers.append(accept(
-                ctx, d, i, direction, edge(z), stop, conds,
+                ctx, d, i, direction, edge(z), far(z), conds,
                 [{"time": b.time, "kind": "breakout close", "price": b.close}] +
                 [{"time": pv.time, "kind": f"zone reaction ({pv.kind})", "price": pv.price}
                  for pv in z.pivots[-4:]],
                 [zone_ref(z, d.tf)],
                 [f"A close back {'below' if direction == LONG else 'above'} {far(z):.2f} "
-                 f"(through the zone) invalidates the breakout."], far(z)))
+                 f"(through the zone) invalidates the breakout."], far(z),
+                trigger_basis=f"{fmt_day(b.time)} close {'above' if direction == LONG else 'below'} "
+                              f"the {word} zone edge {edge(z):.2f} (by {cfg.breakout_buffer_atr} ATR)",
+                anchor_basis=f"Opposite edge of the broken {word} zone {far(z):.2f}",
+                strategy_id=self.id))
         # Developing: price approaching an established level.
         if n > 21:
             c = bars[-1].close
@@ -113,11 +116,16 @@ class DailyBreakout(SwingStrategy):
                                    htf["label"] != ("bearish" if direction == LONG else "bullish"),
                                    cfg.require_htf_not_opposed, htf["detail"])]
                 res.watch = watch_plan(
-                    ctx, d, direction, e, f - s * ctx.config.targets.stop_buffer_atr * atr, conds,
+                    ctx, d, direction, e, f, conds,
                     [f"Price {c:.2f} is approaching {word} {z.low:.2f}-{z.high:.2f}; waiting for a "
                      f"completed {'daily' if d.tf == '1Day' else 'weekly'} close beyond "
                      f"{e:.2f} with volume."],
-                    [zone_ref(z, d.tf)], [f"A close back through {f:.2f} after a breakout."])
+                    [zone_ref(z, d.tf)], [f"A close back through {f:.2f} after a breakout."],
+                    trigger_basis=f"Completed {'daily' if d.tf == '1Day' else 'weekly'} close "
+                                  f"{'above' if direction == LONG else 'below'} the {word} zone edge "
+                                  f"{e:.2f} with volume",
+                    anchor_basis=f"Opposite edge of the {word} zone {f:.2f}",
+                    strategy_id=self.id)
         if not res.triggers and not res.watch:
             res.reasons.append(f"No completed close beyond an established {word} zone.")
         res.reasons += weak[-2:]

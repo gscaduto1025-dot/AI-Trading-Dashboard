@@ -19,7 +19,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
-import type { Analysis, Bar, ChartFocus, KeyLevel, KeyLevelReport } from "@/lib/types";
+import type { Bar, ChartFocus, KeyLevel, KeyLevelReport } from "@/lib/types";
 import { type Band, ZoneBands } from "./chartPrimitives";
 
 export interface ChartToggles {
@@ -115,7 +115,6 @@ function zoneBands(report: KeyLevelReport, toggles: ChartToggles): Band[] {
 
 export default function PriceChart({
   bars,
-  analysis,
   keyLevels,
   toggles,
   isDemo,
@@ -124,7 +123,6 @@ export default function PriceChart({
   focus = null,
 }: {
   bars: Bar[];
-  analysis: Analysis | null;
   keyLevels: KeyLevelReport | null;
   /** A selected strategy setup: its plan, levels and evidence replace the general plan. */
   focus?: ChartFocus | null;
@@ -381,7 +379,7 @@ export default function PriceChart({
       if (l.category === "breakout" && l.valid && toggles.breakouts)
         add(l.price, l.type === "BREAKOUT" ? LEVEL_STYLE.breakout : LEVEL_STYLE.breakdown, l.type === "BREAKOUT" ? "BO" : "BD", LineStyle.Solid, 2);
     }
-    if (focus) {
+    if (focus && toggles.plan) {
       for (const l of focus.supporting_levels) {
         if (l.high - l.low <= 1e-9) add(l.low, "rgba(79,156,249,0.8)", l.label.slice(0, 18), LineStyle.Dotted, 1);
       }
@@ -394,15 +392,8 @@ export default function PriceChart({
         if (focus.target1 !== null) add(focus.target1, COLORS.bull, "T1", LineStyle.LargeDashed, 2);
         if (focus.target2 !== null) add(focus.target2, COLORS.bull, "T2", LineStyle.LargeDashed, 2);
       }
-      return; // the selected setup replaces the general trade plan
     }
-    const s = analysis?.setup;
-    if (s && toggles.plan && s.status !== "NO_TRADE" && s.entry !== null && s.stop !== null) {
-      add(s.entry, "#4f9cf9", "Entry", LineStyle.Solid, 2);
-      add(s.stop, COLORS.bear, "Stop", LineStyle.Solid, 2);
-      s.targets.forEach((t, i) => add(t, COLORS.bull, `T${i + 1}`, LineStyle.LargeDashed, 2));
-    }
-  }, [analysis, keyLevels, toggles.prevHighLow, toggles.session, toggles.breakouts, toggles.plan, focus]);
+  }, [keyLevels, toggles.prevHighLow, toggles.session, toggles.breakouts, toggles.plan, focus]);
 
   return (
     <div className="relative h-full w-full">

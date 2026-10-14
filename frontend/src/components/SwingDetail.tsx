@@ -40,13 +40,155 @@ function LevelList({ levels, empty }: { levels: (StrategyLevelRef | SwingKeyLeve
 }
 
 /** Full audit view of one swing setup. */
-export default function SwingDetail({ setup, onClose }: { setup: SwingSetup; onClose: () => void }) {
+export default function SwingDetail({ setup, onClose, bare = false }: { setup: SwingSetup; onClose: () => void; bare?: boolean }) {
   const s = setup;
   const dir = s.direction === "LONG" ? "long" : "short";
-  const ref = s.entry ?? s.entry_trigger;
-  const pct = (p: number | null) => (p === null || ref === null ? "" : ` (${(((p - ref) / ref) * 100).toFixed(2)}%)`);
   const ms = s.market_structure;
-  const plan = s.status === "TRIGGERED" ? "Trade plan" : "Hypothetical plan (if triggered)";
+  const body = (
+      <div className="space-y-4 p-3">
+      <div className={`rounded-md p-3 ring-1 ${statusClasses(s.status, dir)}`}>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-bold uppercase tracking-[0.15em]">{STATUS_LABEL[s.status]}</span>
+          <span className="text-[11px] font-semibold">{s.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}</span>
+        </div>
+        <p className="mt-1 text-sm font-semibold text-ink">
+          {s.ticker} · {s.strategy_name}
+        </p>
+        <p className="text-[11px] text-muted">
+          {s.timeframe === "1Week" ? "Weekly" : "Daily"} candles · last completed {s.last_candle ?? "—"}
+          {s.status !== "NO_TRADE" && (
+            <>
+              {" "}
+              · quality <span className="num font-semibold text-ink">{s.quality.score.toFixed(0)}</span>/100
+            </>
+          )}
+        </p>
+      </div>
+
+      <Section title="Market structure">
+        <div className="space-y-0.5 rounded-md border border-line bg-panel-2 px-3 py-2 text-[11px]">
+          <p>
+            <span className="text-muted">Structure: </span>
+            {ms.structure ?? "—"}
+          </p>
+          <p>
+            <span className="text-muted">EMA 20/50/200: </span>
+            {ms.ema_stack ?? "—"}
+            <span className="num ml-1 text-faint">
+              ({fmtPrice(ms.ema20 ?? null)} / {fmtPrice(ms.ema50 ?? null)} / {fmtPrice(ms.ema200 ?? null)})
+            </span>
+          </p>
+          <p>
+            <span className="text-muted">Higher timeframe: </span>
+            <span className={tone(ms.higher_timeframe)}>{ms.higher_timeframe ?? "—"}</span>
+          </p>
+          {ms.higher_timeframe_detail && <p className="text-[10px] text-faint">{ms.higher_timeframe_detail}</p>}
+          {ms.supporting && (
+            <p>
+              <span className="text-muted">Supporting: </span>
+              {Object.entries(ms.supporting).map(([tf, v]) => (
+                <span key={tf} className="mr-2">
+                  {tf === "4Hour" ? "4H" : tf === "1Hour" ? "1H" : tf} <span className={tone(v)}>{v}</span>
+                </span>
+              ))}
+            </p>
+          )}
+        </div>
+      </Section>
+
+      <Section title="Why">
+        <ul className="space-y-1">
+          {s.reasons.map((r, i) => (
+            <li key={i} className="text-xs leading-relaxed text-ink/85">
+              {r}
+            </li>
+          ))}
+        </ul>
+      </Section>
+
+      {s.confirmation.length > 0 && (
+        <Section title="Confirmation conditions">
+          <ul className="space-y-1">
+            {s.confirmation.map((c, i) => (
+              <li key={i} className="flex items-start gap-2">
+                <span
+                  className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${
+                    c.passed === null ? "bg-white/5 text-faint" : c.passed ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
+                  }`}
+                >
+                  {c.passed === null ? "–" : c.passed ? "✓" : "✕"}
+                </span>
+                <span className="min-w-0">
+                  <span className="block text-xs text-ink/90">
+                    {c.name}
+                    {!c.required && <span className="ml-1 text-[9px] uppercase text-faint">supporting</span>}
+                    {c.passed === null && <span className="ml-1 text-[9px] uppercase text-faint">n/a</span>}
+                  </span>
+                  <span className="block text-[11px] text-faint">{c.detail}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {s.invalidation.length > 0 && (
+        <Section title="Invalidation">
+          <ul className="space-y-1">
+            {s.invalidation.map((r, i) => (
+              <li key={i} className="text-xs text-bear/90">
+                {r}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {s.supporting_levels.length > 0 && (
+        <Section title="Setup levels">
+          <LevelList levels={s.supporting_levels} empty="" />
+        </Section>
+      )}
+      <Section title="Relevant daily levels">
+        <LevelList levels={s.daily_levels} empty="No daily key levels near price." />
+      </Section>
+      <Section title="Relevant weekly levels">
+        <LevelList levels={s.weekly_levels} empty="No weekly key levels near price." />
+      </Section>
+
+      {s.evidence.length > 0 && (
+        <Section title="Technical evidence">
+          <ul className="space-y-0.5">
+            {s.evidence.map((e, i) => (
+              <li key={i} className="num flex justify-between gap-2 text-[11px]">
+                <span className="text-ink/85">{e.kind}</span>
+                <span className="shrink-0 text-faint">
+                  {fmtPrice(e.price)} @ {day(e.time)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
+      {s.triggers.length > 0 && (
+        <Section title="Recent triggers (last 60 candles)">
+          <ul className="space-y-0.5">
+            {s.triggers.slice(-6).map((t, i) => (
+              <li key={i} className="num text-[10px] text-faint">
+                {day(t.time)} · trig {fmtPrice(t.entry_trigger)} · S {fmtPrice(t.stop)} · {t.risk_reward}R ·{" "}
+                {t.accepted ? "accepted" : `rejected: ${t.blocked}`}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+      <p className="text-[10px] leading-relaxed text-faint">
+        Rules-based signal on completed daily/weekly candles. Educational analysis only; TradeScope AI does not place trades.
+      </p>
+    </div>
+  );
+  if (bare) return body;
   return (
     <Panel
       title="Swing Setup Detail"
@@ -57,227 +199,7 @@ export default function SwingDetail({ setup, onClose }: { setup: SwingSetup; onC
       }
       bodyClassName="overflow-y-auto"
     >
-      <div className="space-y-4 p-3">
-        <div className={`rounded-md p-3 ring-1 ${statusClasses(s.status, dir)}`}>
-          <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold uppercase tracking-[0.15em]">{STATUS_LABEL[s.status]}</span>
-            <span className="text-[11px] font-semibold">{s.direction === "LONG" ? "▲ LONG" : "▼ SHORT"}</span>
-          </div>
-          <p className="mt-1 text-sm font-semibold text-ink">
-            {s.ticker} · {s.strategy_name}
-          </p>
-          <p className="text-[11px] text-muted">
-            {s.timeframe === "1Week" ? "Weekly" : "Daily"} candles · last completed {s.last_candle ?? "—"}
-            {s.status !== "NO_TRADE" && (
-              <>
-                {" "}
-                · quality <span className="num font-semibold text-ink">{s.quality.score.toFixed(0)}</span>/100
-              </>
-            )}
-          </p>
-        </div>
-
-        <Section title="Market structure">
-          <div className="space-y-0.5 rounded-md border border-line bg-panel-2 px-3 py-2 text-[11px]">
-            <p>
-              <span className="text-muted">Structure: </span>
-              {ms.structure ?? "—"}
-            </p>
-            <p>
-              <span className="text-muted">EMA 20/50/200: </span>
-              {ms.ema_stack ?? "—"}
-              <span className="num ml-1 text-faint">
-                ({fmtPrice(ms.ema20 ?? null)} / {fmtPrice(ms.ema50 ?? null)} / {fmtPrice(ms.ema200 ?? null)})
-              </span>
-            </p>
-            <p>
-              <span className="text-muted">Higher timeframe: </span>
-              <span className={tone(ms.higher_timeframe)}>{ms.higher_timeframe ?? "—"}</span>
-            </p>
-            {ms.higher_timeframe_detail && <p className="text-[10px] text-faint">{ms.higher_timeframe_detail}</p>}
-            {ms.supporting && (
-              <p>
-                <span className="text-muted">Supporting: </span>
-                {Object.entries(ms.supporting).map(([tf, v]) => (
-                  <span key={tf} className="mr-2">
-                    {tf === "4Hour" ? "4H" : tf === "1Hour" ? "1H" : tf} <span className={tone(v)}>{v}</span>
-                  </span>
-                ))}
-              </p>
-            )}
-          </div>
-        </Section>
-
-        {s.entry_trigger !== null && s.stop !== null && (
-          <Section title={plan}>
-            <div className="divide-y divide-line rounded-md border border-line bg-panel-2 px-3 text-xs">
-              <div className="flex justify-between py-1.5">
-                <span className="text-muted">Entry trigger</span>
-                <span className="num font-medium text-accent">{fmtPrice(s.entry_trigger)}</span>
-              </div>
-              {s.entry_zone && (
-                <div className="flex justify-between py-1.5">
-                  <span className="text-muted">Potential entry zone</span>
-                  <span className="num">
-                    {fmtPrice(s.entry_zone[0])}–{fmtPrice(s.entry_zone[1])}
-                  </span>
-                </div>
-              )}
-              {s.status === "TRIGGERED" && (
-                <div className="flex justify-between py-1.5">
-                  <span className="text-muted">Trigger close</span>
-                  <span className="num">{fmtPrice(s.entry)}</span>
-                </div>
-              )}
-              {[
-                ["Stop-loss", s.stop, "text-bear"],
-                ["Target 1", s.target1, "text-bull"],
-                ["Target 2", s.target2, "text-bull"],
-              ].map(([label, v, cls]) => (
-                <div key={label as string} className="flex justify-between py-1.5">
-                  <span className="text-muted">{label as string}</span>
-                  <span className={`num font-medium ${cls}`}>
-                    {fmtPrice(v as number | null)}
-                    <span className="text-faint">{pct(v as number | null)}</span>
-                  </span>
-                </div>
-              ))}
-              <div className="flex justify-between py-1.5">
-                <span className="text-muted">Reward : risk (T1)</span>
-                <span className="num font-medium">{s.risk_reward?.toFixed(2)} : 1</span>
-              </div>
-              <div className="flex justify-between py-1.5">
-                <span className="text-muted">Distance to trigger</span>
-                <span className="num">
-                  {s.distance_to_trigger_pct === null
-                    ? "—"
-                    : s.distance_to_trigger_pct <= 0
-                      ? `beyond by ${Math.abs(s.distance_to_trigger_pct).toFixed(2)}%`
-                      : `${s.distance_to_trigger_pct.toFixed(2)}% (${s.distance_to_trigger_atr?.toFixed(2)} ATR)`}
-                </span>
-              </div>
-              {s.status === "TRIGGERED" && (
-                <div className="flex justify-between py-1.5">
-                  <span className="text-muted">Triggered on</span>
-                  <span className="num">{day(s.trigger_time)}</span>
-                </div>
-              )}
-              {s.outcome && (
-                <div className="flex justify-between py-1.5">
-                  <span className="text-muted">Since trigger (info only)</span>
-                  <span className="num">{s.outcome.state.replaceAll("_", " ")}</span>
-                </div>
-              )}
-            </div>
-            {s.targets_basis.length > 0 && <p className="mt-1 text-[10px] text-faint">{s.targets_basis.join(" · ")}</p>}
-          </Section>
-        )}
-
-        <Section title="Why">
-          <ul className="space-y-1">
-            {s.reasons.map((r, i) => (
-              <li key={i} className="text-xs leading-relaxed text-ink/85">
-                {r}
-              </li>
-            ))}
-          </ul>
-        </Section>
-
-        {s.confirmation.length > 0 && (
-          <Section title="Confirmation conditions">
-            <ul className="space-y-1">
-              {s.confirmation.map((c, i) => (
-                <li key={i} className="flex items-start gap-2">
-                  <span
-                    className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded text-[10px] font-bold ${
-                      c.passed === null ? "bg-white/5 text-faint" : c.passed ? "bg-bull/20 text-bull" : "bg-bear/20 text-bear"
-                    }`}
-                  >
-                    {c.passed === null ? "–" : c.passed ? "✓" : "✕"}
-                  </span>
-                  <span className="min-w-0">
-                    <span className="block text-xs text-ink/90">
-                      {c.name}
-                      {!c.required && <span className="ml-1 text-[9px] uppercase text-faint">supporting</span>}
-                      {c.passed === null && <span className="ml-1 text-[9px] uppercase text-faint">n/a</span>}
-                    </span>
-                    <span className="block text-[11px] text-faint">{c.detail}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
-
-        {s.invalidation.length > 0 && (
-          <Section title="Invalidation">
-            <ul className="space-y-1">
-              {s.invalidation.map((r, i) => (
-                <li key={i} className="text-xs text-bear/90">
-                  {r}
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
-
-        {s.supporting_levels.length > 0 && (
-          <Section title="Setup levels">
-            <LevelList levels={s.supporting_levels} empty="" />
-          </Section>
-        )}
-        <Section title="Relevant daily levels">
-          <LevelList levels={s.daily_levels} empty="No daily key levels near price." />
-        </Section>
-        <Section title="Relevant weekly levels">
-          <LevelList levels={s.weekly_levels} empty="No weekly key levels near price." />
-        </Section>
-
-        {s.evidence.length > 0 && (
-          <Section title="Technical evidence">
-            <ul className="space-y-0.5">
-              {s.evidence.map((e, i) => (
-                <li key={i} className="num flex justify-between gap-2 text-[11px]">
-                  <span className="text-ink/85">{e.kind}</span>
-                  <span className="shrink-0 text-faint">
-                    {fmtPrice(e.price)} @ {day(e.time)}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
-
-        {s.status !== "NO_TRADE" && (
-          <Section title="Quality score">
-            <ul className="space-y-0.5">
-              {Object.entries(s.quality.components).map(([k, v]) => (
-                <li key={k} className="num flex justify-between text-[11px]">
-                  <span className="text-ink/85">{k.replaceAll("_", " ")}</span>
-                  <span className="text-faint">{v}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-1 text-[10px] text-faint">{s.quality.note}</p>
-          </Section>
-        )}
-
-        {s.triggers.length > 0 && (
-          <Section title="Recent triggers (last 60 candles)">
-            <ul className="space-y-0.5">
-              {s.triggers.slice(-6).map((t, i) => (
-                <li key={i} className="num text-[10px] text-faint">
-                  {day(t.time)} · trig {fmtPrice(t.entry_trigger)} · S {fmtPrice(t.stop)} · {t.risk_reward}R ·{" "}
-                  {t.accepted ? "accepted" : `rejected: ${t.blocked}`}
-                </li>
-              ))}
-            </ul>
-          </Section>
-        )}
-        <p className="text-[10px] leading-relaxed text-faint">
-          Rules-based signal on completed daily/weekly candles. Educational analysis only; TradeScope AI does not place trades.
-        </p>
-      </div>
+      {body}
     </Panel>
   );
 }

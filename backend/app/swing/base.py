@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from ..planning.plan import (SIGNAL_NONE, TRIGGERED, WATCHING, PlanInput, PriceRef,
+                             QualityInputs, build_plan)
 from ..strategies.common import Condition
 from .context import SwingContext, SwingTF, fmt_day
 
@@ -23,36 +25,32 @@ class SwingTrigger:
     confirmed_at: int
     entry_trigger: float  # the level price had to close beyond
     entry: float  # trigger candle close
-    entry_zone: tuple[float, float]
-    stop: float
-    target1: float
-    target2: float
-    risk_reward: float
+    entry_zone: tuple[float, float] | None
+    stop: float | None
+    target1: float | None
+    target2: float | None
+    risk_reward: float | None
     targets_basis: list[str]
     conditions: list[Condition]
     evidence: list[dict]
     levels: list[dict]
     invalidation: list[str]
     invalidation_price: float  # a close beyond this cancels the setup
-    blocked: str | None = None
+    blocked: str | None = None  # why the trade plan rejected it (None = accepted)
+    plan_input: PlanInput | None = None
+    plan: dict | None = None
 
 
 @dataclass
 class SwingWatch:
-    """A developing setup with a complete hypothetical plan."""
+    """A developing setup: objective trigger and invalidation known, confirmation pending."""
 
-    entry_trigger: float
-    entry_zone: tuple[float, float]
-    stop: float
-    target1: float
-    target2: float
-    risk_reward: float
-    targets_basis: list[str]
     conditions: list[Condition]
     reasons: list[str]
     levels: list[dict]
     invalidation: list[str]
-    plan_problem: str | None = None  # why a trigger at this plan would be rejected
+    plan_input: PlanInput
+    plan: dict
 
 
 @dataclass
@@ -71,6 +69,7 @@ class SwingStrategy:
         return getattr(ctx.config, self.config_key).enabled
 
     def evaluate(self, ctx: SwingContext, d: SwingTF, direction: str, start: int) -> SwingResult:
+        # Implementations pass strategy_id=self.id to accept()/watch_plan().
         """Scan candles start..n-1 for completed-candle triggers; describe a developing
         setup (watch) on the latest candle."""
         raise NotImplementedError
@@ -88,75 +87,115 @@ def zone_ref(z, tf: str, label: str | None = None) -> dict:
 MAJOR_EXTREME_LOOKBACK = {"1Day": 250, "1Week": 52}  # ~one year
 
 
-def target_candidates(ctx: SwingContext, d: SwingTF, i: int, direction: str, entry: float
-                      ) -> list[tuple[float, str]]:
-    """Significant levels beyond `entry` known at candle i: support/resistance zones (near
-    edge, >= 2 reactions) on this timeframe and, for daily candles, weekly zones, plus the
-    ~1-year extreme (highest high / lowest low of candles before i). Minor single swing
-    points are not treated as targets - every small swing would cap T1 at ~1R."""
+def target_candidates(ctx: SwingContext, d: SwingTF, i: int, direction: str) -> list[PriceRef]:
+    """Confirmed levels known at candle i: support/resistance zones (near edge, >= 2
+    reactions) on this timeframe and, for daily candles, weekly zones, plus the ~1-year
+    extreme (highest high / lowest low of candles before i). Minor single swing points are
+    not targets."""
     zones = [(z, d.tf) for z in d.zones_at(i)]
     if d.tf == "1Day":
         zones += [(z, "1Week") for z in ctx.weekly_zones_for_daily(i)]
     out = []
-    s = sgn(direction)
     for z, tf in zones:
         edge = z.low if direction == LONG else z.high
-        if s * (edge - entry) > 0:
-            out.append((edge, f"{'weekly' if tf == '1Week' else 'daily'} zone "
-                              f"{z.low:.2f}-{z.high:.2f}"))
+        n = len(z.pivots)
+        out.append(PriceRef(edge, f"{'weekly' if tf == '1Week' else 'daily'} zone "
+                                  f"{z.low:.2f}-{z.high:.2f} ({n} reactions), near edge {edge:.2f}",
+                            "zone", tf, min(n, 5) * 20.0))
     look = MAJOR_EXTREME_LOOKBACK.get(d.tf, 250)
     prior = d.bars[max(0, i - look):i]
     if prior:
-        if direction == LONG:
-            b = max(prior, key=lambda x: x.high)
-            px, word = b.high, "high"
-        else:
-            b = min(prior, key=lambda x: x.low)
-            px, word = b.low, "low"
-        if s * (px - entry) > 0:
-            out.append((px, f"1-year {word} {fmt_day(b.time)}"))
+        b = max(prior, key=lambda x: x.high) if direction == LONG else \
+            min(prior, key=lambda x: x.low)
+        px = b.high if direction == LONG else b.low
+        out.append(PriceRef(px, f"1-year {'high' if direction == LONG else 'low'} {px:.2f} "
+                                f"({fmt_day(b.time)})", "swing", d.tf))
     return out
 
 
-def plan_targets(ctx: SwingContext, d: SwingTF, i: int, direction: str, entry: float,
-                 stop: float, extra: list[tuple[float, str]] | None = None):
-    """T1 = first candidate >= min_target_r R away; T2 = next >= t2_extra_r R beyond T1;
-    measured R fallbacks otherwise. Returns (t1, t2, rr, basis)."""
-    t = ctx.config.targets
-    s = sgn(direction)
-    risk = abs(entry - stop)
-    cands = target_candidates(ctx, d, i, direction, entry) + list(extra or [])
-    cands = sorted(((p, w) for p, w in cands if s * (p - entry) > 0),
-                   key=lambda x: s * (x[0] - entry))
-    t1 = next(((p, w) for p, w in cands if s * (p - entry) >= t.min_target_r * risk), None) \
-        or (entry + s * t.fallback_t1_r * risk, f"measured {t.fallback_t1_r}R (no level)")
-    t2 = next(((p, w) for p, w in cands if s * (p - t1[0]) >= t.t2_extra_r * risk), None) \
-        or (entry + s * max(t.fallback_t2_r * risk, abs(t1[0] - entry) + t.t2_extra_r * risk),
-            f"measured {t.fallback_t2_r}R (no further level)")
-    rr = abs(t1[0] - entry) / risk if risk > 0 else 0.0
-    return t1[0], t2[0], rr, [f"T1 {t1[0]:.2f}: {t1[1]}", f"T2 {t2[0]:.2f}: {t2[1]}"]
+TREND_FOLLOWING = {"swing_breakout", "swing_trend_continuation", "swing_consolidation_breakout"}
 
 
-def entry_zone(ctx: SwingContext, d: SwingTF, i: int, trigger: float, direction: str):
-    a = d.atr_before(i) * ctx.config.targets.entry_zone_atr
-    return (trigger, trigger + a) if direction == LONG else (trigger - a, trigger)
+def _tf_word(tf: str) -> str:
+    return "Weekly" if tf == "1Week" else "Daily"
+
+
+def quality_inputs(ctx: SwingContext, d: SwingTF, i: int, direction: str,
+                   levels: list[dict]) -> QualityInputs:
+    want = "bullish" if direction == LONG else "bearish"
+    htf = ctx.htf(d.tf, i)
+    hs = "aligned" if htf["label"] == want else "neutral" if htf["label"] == "neutral" \
+        else "opposed"
+    react = [l.get("reactions") for l in levels if l.get("reactions")]
+    strength = min(max(react), 5) * 20.0 if react else None
+    rv = d.relvol(i) if d.volume_available else None
+    st = d.structure_at(i + 1)
+    trend = st.get("trend")
+    ss = "unknown" if trend is None else "mixed" if trend == "mixed" else \
+        "aligned" if trend == ("up" if direction == LONG else "down") else "opposed"
+    return QualityInputs(hs, htf["detail"], strength,
+                         f"setup zone with {max(react)} confirmed reactions" if react else "",
+                         rv, "" if rv is not None else "volume unavailable (scored neutral)",
+                         ss, f"{st['label']}; EMA stack {d.ema_stack(i)}")
+
+
+def conflicts_for(ctx: SwingContext, d: SwingTF, i: int, direction: str,
+                  strategy_id: str) -> list[str]:
+    if strategy_id not in TREND_FOLLOWING:
+        return []  # reversal strategies trade against the prior trend by design
+    want = "bullish" if direction == LONG else "bearish"
+    opp = "bearish" if direction == LONG else "bullish"
+    out = []
+    htf = ctx.htf(d.tf, i)
+    if htf["label"] == opp:
+        out.append(f"higher timeframe is {opp} against a {want} trade ({htf['detail']})")
+    sup = ctx.supporting(d.end[i])
+    if sup.get("4Hour") == opp:
+        out.append(f"4-hour trend is {opp} against a {want} trade")
+    return out
+
+
+def plan_input(ctx: SwingContext, d: SwingTF, i: int, direction: str, signal: str,
+               trigger: PriceRef | None, anchor: PriceRef | None, conditions: list[Condition],
+               levels: list[dict], invalidation: list[str], extra=None,
+               blocked: str | None = None, notes: list[str] | None = None,
+               strategy_id: str = "", strategy_name: str = "") -> PlanInput:
+    b = d.bars[i]
+    entry = None
+    if signal == TRIGGERED:
+        entry = PriceRef(b.close, f"{_tf_word(d.tf)} candle of {fmt_day(b.time)} closed "
+                                  f"{b.close:.2f}", "close", d.tf)
+    cands = target_candidates(ctx, d, min(i + 1, len(d.bars)) if signal == WATCHING else i,
+                              direction)
+    cands += [x if isinstance(x, PriceRef) else PriceRef(x[0], f"{x[1]} {x[0]:.2f}", "measured", d.tf)
+              for x in (extra or []) if x is not None]
+    return PlanInput(
+        ticker=ctx.ticker, mode="swing", strategy=strategy_id, strategy_name=strategy_name,
+        direction=direction, timeframe=d.tf, signal=signal,
+        atr=d.atr_before(i + 1 if signal == WATCHING else i),
+        atr_label=f"{_tf_word(d.tf).lower()} ATR(14)", entry_trigger=trigger, entry_price=entry,
+        stop_anchor=anchor, candidates=cands, confirmation=list(conditions),
+        invalidation=list(invalidation),
+        quality=quality_inputs(ctx, d, i, direction, levels),
+        conflicts=conflicts_for(ctx, d, i, direction, strategy_id),
+        data_issues=list(ctx.gate_reasons), blocked=blocked, notes=list(notes or []),
+        signal_time=b.time)
 
 
 def accept(ctx: SwingContext, d: SwingTF, i: int, direction: str, trigger_level: float,
-           stop: float, conditions: list[Condition], evidence: list[dict], levels: list[dict],
+           anchor: float, conditions: list[Condition], evidence: list[dict], levels: list[dict],
            invalidation: list[str], invalidation_price: float,
-           extra_targets: list[tuple[float, str]] | None = None) -> SwingTrigger:
-    """Trigger on the close of candle i, with the shared rules:
-    trigger candle not abnormal (range <= max_trigger_range_atr x ATR), close not more than
-    max_extension_atr x ATR past the trigger level (no chasing), stop on the correct side and
-    at most max_risk_atr x ATR away, reward/risk to T1 >= min_rr."""
+           extra_targets: list[tuple[float, str]] | None = None, *, trigger_basis: str = "",
+           anchor_basis: str = "", strategy_id: str = "") -> SwingTrigger:
+    """Trigger on the close of candle i. Strategy entry rules checked here: the trigger
+    candle is not abnormal (range <= max_trigger_range_atr x ATR) and the close is not more
+    than max_extension_atr x ATR past the trigger (no chasing). Stop placement, risk,
+    targets and reward/risk are decided by the trade-planning engine."""
     g = ctx.config.gates
     b = d.bars[i]
     atr = d.atr_before(i)
-    entry = b.close
-    t1, t2, rr, basis = plan_targets(ctx, d, i, direction, entry, stop, extra_targets)
     s = sgn(direction)
-    ext = s * (entry - trigger_level) / atr if atr else 0.0
+    ext = s * (b.close - trigger_level) / atr if atr else 0.0
     conds = list(conditions)
     abnormal = b.high - b.low > g.max_trigger_range_atr * atr
     conds.append(Condition(f"Trigger candle range <= {g.max_trigger_range_atr} ATR", not abnormal,
@@ -164,50 +203,46 @@ def accept(ctx: SwingContext, d: SwingTF, i: int, direction: str, trigger_level:
     conds.append(Condition(f"Close within {g.max_extension_atr} ATR of the trigger (no chasing)",
                            ext <= g.max_extension_atr, True,
                            f"{ext:.2f} ATR beyond {trigger_level:.2f}", b.time))
-    risk_ok = s * (entry - stop) > 0
-    risk_atr = abs(entry - stop) / atr if atr else 0.0
-    conds.append(Condition(f"Stop distance <= {g.max_risk_atr} ATR", risk_atr <= g.max_risk_atr,
-                           True, f"{abs(entry - stop):.2f} = {risk_atr:.2f} ATR", b.time))
-    rr_ok = rr >= ctx.config.targets.min_rr - 1e-9
-    conds.append(Condition(f"Reward/risk to T1 >= {ctx.config.targets.min_rr}", risk_ok and rr_ok,
-                           True, f"{rr:.2f}:1 (entry {entry:.2f}, stop {stop:.2f}, T1 {t1:.2f})",
-                           b.time))
-    blocked = None
+    pre = None
     if abnormal:
-        blocked = f"abnormal trigger candle (range {b.high - b.low:.2f} > {g.max_trigger_range_atr} ATR)"
+        pre = f"abnormal trigger candle (range {b.high - b.low:.2f} > {g.max_trigger_range_atr} ATR)"
     elif ext > g.max_extension_atr:
-        blocked = f"close {ext:.2f} ATR past the trigger level (chasing)"
-    elif not risk_ok:
-        blocked = "stop is not beyond the entry"
-    elif risk_atr > g.max_risk_atr:
-        blocked = f"stop {risk_atr:.2f} ATR away (> {g.max_risk_atr})"
-    elif not rr_ok:
-        blocked = f"reward/risk {rr:.2f} < {ctx.config.targets.min_rr}"
-    return SwingTrigger(i, b.time, d.end[i], trigger_level, entry,
-                        entry_zone(ctx, d, i, trigger_level, direction), stop, t1, t2, rr, basis,
-                        conds, evidence, levels, invalidation, invalidation_price, blocked)
+        pre = f"close {ext:.2f} ATR past the trigger level (chasing)"
+    word = "above" if s > 0 else "below"
+    trig = PriceRef(trigger_level, trigger_basis or f"{_tf_word(d.tf).lower()} close {word} "
+                                                     f"{trigger_level:.2f}", "trigger", d.tf)
+    anc = PriceRef(anchor, anchor_basis or f"structural invalidation {anchor:.2f}", "structure",
+                   d.tf)
+    inp = plan_input(ctx, d, i, direction, TRIGGERED, trig, anc, conds, levels, invalidation,
+                     extra_targets, pre, strategy_id=strategy_id)
+    plan = build_plan(inp, ctx.planning)
+    blocked = None if plan["status"] == TRIGGERED else (plan["reasons"] or ["rejected"])[0]
+    num = lambda k: plan[k]["price"] if plan.get(k) else None
+    zone = (plan["entry_zone"]["low"], plan["entry_zone"]["high"]) if plan["entry_zone"] else None
+    basis = [f"T{k} {plan[f'target{k}']['price']:.2f}: {plan[f'target{k}']['basis']}"
+             for k in (1, 2) if plan.get(f"target{k}")]
+    return SwingTrigger(i, b.time, d.end[i], trigger_level, b.close, zone, num("stop"),
+                        num("target1"), num("target2"), plan["risk_reward_t1"], basis, conds,
+                        evidence, levels, invalidation, invalidation_price, blocked, inp, plan)
 
 
-def watch_plan(ctx: SwingContext, d: SwingTF, direction: str, trigger: float, stop: float,
+def watch_plan(ctx: SwingContext, d: SwingTF, direction: str, trigger: float, anchor: float,
                conditions: list[Condition], reasons: list[str], levels: list[dict],
-               invalidation: list[str], extra: list[tuple[float, str]] | None = None
-               ) -> SwingWatch:
-    """Hypothetical plan if the trigger fires now (levels known as of the latest candle)."""
+               invalidation: list[str], extra: list[tuple[float, str]] | None = None, *,
+               trigger_basis: str = "", anchor_basis: str = "",
+               strategy_id: str = "") -> SwingWatch:
+    """Conditional plan if the trigger fires (levels known as of the latest candle)."""
     n = len(d.bars)
-    t1, t2, rr, basis = plan_targets(ctx, d, n, direction, trigger, stop, extra)
-    min_rr = ctx.config.targets.min_rr
-    g = ctx.config.gates
-    atr = d.atr_before(n)
-    risk_atr = abs(trigger - stop) / atr if atr else 0.0
-    conds = list(conditions) + [
-        Condition(f"Stop distance <= {g.max_risk_atr} ATR", risk_atr <= g.max_risk_atr, True,
-                  f"{abs(trigger - stop):.2f} = {risk_atr:.2f} ATR"),
-        Condition(f"Reward/risk to T1 >= {min_rr} (at the trigger)", rr >= min_rr - 1e-9, True,
-                  f"{rr:.2f}:1 (trigger {trigger:.2f}, stop {stop:.2f}, T1 {t1:.2f})")]
-    problem = None
-    if risk_atr > g.max_risk_atr:
-        problem = f"the stop would be {risk_atr:.2f} ATR away (> {g.max_risk_atr})"
-    elif rr < min_rr - 1e-9:
-        problem = f"the plan's reward/risk {rr:.2f} is below {min_rr}"
-    return SwingWatch(trigger, entry_zone(ctx, d, n, trigger, direction), stop, t1, t2, rr,
-                      basis, conds, reasons, levels, invalidation, problem)
+    word = "above" if direction == LONG else "below"
+    trig = PriceRef(trigger, trigger_basis or f"{_tf_word(d.tf).lower()} close {word} "
+                                               f"{trigger:.2f}", "trigger", d.tf)
+    anc = PriceRef(anchor, anchor_basis or f"structural invalidation {anchor:.2f}", "structure",
+                   d.tf)
+    inp = plan_input(ctx, d, n - 1, direction, WATCHING, trig, anc, conditions, levels,
+                     invalidation, extra, notes=reasons, strategy_id=strategy_id)
+    return SwingWatch(list(conditions), list(reasons), levels, list(invalidation), inp,
+                      build_plan(inp, ctx.planning))
+
+
+__all__ = ["LONG", "SHORT", "SIGNAL_NONE", "SwingTrigger", "SwingWatch", "SwingResult",
+           "SwingStrategy", "accept", "watch_plan", "plan_input", "zone_ref", "sgn"]

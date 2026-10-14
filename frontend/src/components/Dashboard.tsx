@@ -13,6 +13,7 @@ import type {
   KeyLevelReport,
   MarketStatus,
   Mode,
+  PlansResponse,
   Quote,
   RecordedSetup,
   SessionKind,
@@ -21,7 +22,9 @@ import type {
   SwingEvaluation,
   SwingSetup,
   SwingSortKey,
+  TradePlan,
 } from "@/lib/types";
+import type { ChartFocus } from "@/lib/types";
 import AIPanel from "./AIPanel";
 import AlertsPanel from "./AlertsPanel";
 import BiasPanel from "./BiasPanel";
@@ -29,7 +32,7 @@ import LevelsPanel from "./LevelsPanel";
 import MarketStatusBar from "./MarketStatusBar";
 import PriceChart, { type ChartToggles } from "./PriceChart";
 import RecentSetups from "./RecentSetups";
-import SetupPanel from "./SetupPanel";
+import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
 import StrategySetupsPanel from "./StrategySetupsPanel";
 import SwingDetail from "./SwingDetail";
@@ -71,6 +74,21 @@ function refreshInterval(isDemo: boolean, phase: MarketStatus["phase"] | undefin
   return timeframe === "1Min" ? 10_000 : 20_000;
 }
 
+/** Chart overlay for a plan: entry, trigger, entry zone, stop and targets. */
+function planFocus(p: TradePlan): ChartFocus {
+  return {
+    direction: p.direction,
+    entry: p.entry?.price ?? null,
+    stop: p.stop?.price ?? null,
+    target1: p.target1?.price ?? null,
+    target2: p.target2?.price ?? null,
+    entry_trigger: p.entry_trigger?.price ?? null,
+    entry_zone: p.entry_zone ? [p.entry_zone.low, p.entry_zone.high] : null,
+    supporting_levels: [],
+    evidence: [],
+  };
+}
+
 export default function Dashboard() {
   const [health, setHealth] = useState<Health | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
@@ -87,7 +105,6 @@ export default function Dashboard() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
   const [keyLevels, setKeyLevels] = useState<KeyLevelReport | null>(null);
   const [levelsError, setLevelsError] = useState<string | null>(null);
-  const [blocked, setBlocked] = useState<{ title: string; message: string } | null>(null);
   // Key of the view whose data is currently shown; loading while it lags behind.
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   // AI results are tied to the symbol/mode/timeframe they were generated for.
@@ -100,6 +117,7 @@ export default function Dashboard() {
   const [swing, setSwing] = useState<SwingEvaluation | null>(null);
   const [swingError, setSwingError] = useState<string | null>(null);
   const [swingSort, setSwingSort] = useState<SwingSortKey>("quality");
+  const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [notify, setNotify] = useState(false);
@@ -200,14 +218,8 @@ export default function Dashboard() {
         }
         if (a.status === "fulfilled") {
           setAnalysis(a.value);
-          setBlocked(null);
         } else {
-          const err = a.reason as ApiError;
           setAnalysis(null);
-          setBlocked({
-            title: err.display ?? (err.code === "BACKEND_OFFLINE" ? "BACKEND OFFLINE" : UNAVAILABLE),
-            message: err.message,
-          });
         }
       })
       .finally(() => {
@@ -260,12 +272,30 @@ export default function Dashboard() {
     mode === "day" ? (strategies?.setups.find((x) => x.id === selectedSetupId) ?? null) : null;
   const selectedSwing: SwingSetup | null =
     mode === "swing" ? (swing?.setups.find((x) => x.id === selectedSetupId) ?? null) : null;
-  const chartFocus =
+  // Trade plans for the current symbol and mode (the sidebar's default view).
+  const plansKey = `${symbol}|${mode}`;
+  usePolling(
+    () => {
+      const key = plansKey;
+      api
+        .plans(symbol, mode)
+        .then((r) => setPlans({ key, data: r, error: null }))
+        .catch((e) => setPlans({ key, data: null, error: errorText(e) }));
+    },
+    mode === "day" ? strategyRefreshMs : swingRefreshMs,
+    [plansKey, strategyRefreshMs, swingRefreshMs, health !== null],
+  );
+  const currentPlans = plans?.key === plansKey ? plans : null;
+  const selectedPlan = selectedSetup?.plan ?? selectedSwing?.plan ?? null;
+  const topPlan = currentPlans?.data?.plans.find((p) => p.status !== "NO_TRADE" && p.timeframe === timeframe) ?? null;
+  const chartFocus: ChartFocus | null =
     selectedSetup && selectedSetup.ticker === symbol && selectedSetup.timeframe === timeframe
       ? selectedSetup
       : selectedSwing && selectedSwing.ticker === symbol && selectedSwing.timeframe === timeframe
         ? selectedSwing
-        : null;
+        : topPlan
+          ? planFocus(topPlan)
+          : null;
 
   const selectStrategySetup = (st: StrategySetup) => {
     setSelectedSetupId(st.id);
@@ -565,7 +595,6 @@ export default function Dashboard() {
             <div className="relative min-h-0 flex-1">
               <PriceChart
                 bars={candles?.bars ?? []}
-                analysis={analysis}
                 keyLevels={keyLevels}
                 focus={chartFocus}
                 toggles={toggles}
@@ -596,13 +625,21 @@ export default function Dashboard() {
         </div>
 
         <div className="max-h-[720px] lg:h-[620px] lg:max-h-none">
-          {selectedSetup ? (
-            <StrategyDetail setup={selectedSetup} onClose={() => setSelectedSetupId(null)} />
-          ) : selectedSwing ? (
-            <SwingDetail setup={selectedSwing} onClose={() => setSelectedSetupId(null)} />
-          ) : (
-            <SetupPanel analysis={analysis} loading={loading} blocked={loading ? null : blocked} />
-          )}
+          <PlanSidebar
+            key={selectedPlan ? `sel-${selectedSetupId}` : `sym-${plansKey}`}
+            selected={selectedPlan}
+            details={
+              selectedSetup ? (
+                <StrategyDetail bare setup={selectedSetup} onClose={() => setSelectedSetupId(null)} />
+              ) : selectedSwing ? (
+                <SwingDetail bare setup={selectedSwing} onClose={() => setSelectedSetupId(null)} />
+              ) : null
+            }
+            onClose={() => setSelectedSetupId(null)}
+            plans={currentPlans?.data ?? null}
+            error={currentPlans?.error ?? null}
+            isDemo={isDemo}
+          />
         </div>
       </main>
 

@@ -348,8 +348,9 @@ export interface StrategySetup {
   confirmed_at: number | null;
   outcome: { state: string; time: number | null; bars_after_trigger: number | null } | null;
   targets_basis: string[];
-  triggers_today: { time: number; entry: number; stop: number; risk_reward: number; accepted: boolean; blocked: string | null }[];
+  triggers_today: { time: number; entry: number; stop: number | null; risk_reward: number | null; accepted: boolean; blocked: string | null }[];
   is_demo: boolean;
+  plan: TradePlan | null;
 }
 
 export interface StrategyEvaluation {
@@ -392,7 +393,8 @@ export interface SwingSetup {
   direction: "LONG" | "SHORT";
   timeframe: string;
   status: StrategyStatus;
-  quality: { score: number; components: Record<string, number>; note: string };
+  quality: { score: number; components: QualityComponent[]; conflict_penalty: number; conflicts: string[]; note: string };
+  plan: TradePlan | null;
   market_structure: {
     timeframe?: string;
     structure?: string;
@@ -428,7 +430,7 @@ export interface SwingSetup {
   trigger_time: number | null;
   confirmed_at: number | null;
   outcome: { state: string; time: number | null; bars_after_trigger: number | null } | null;
-  triggers: { time: number; entry_trigger: number; entry: number; stop: number; risk_reward: number; accepted: boolean; blocked: string | null }[];
+  triggers: { time: number; entry_trigger: number; entry: number; stop: number | null; risk_reward: number | null; accepted: boolean; blocked: string | null }[];
   last_close: number | null;
   last_candle: string | null;
   htf_bias: string;
@@ -449,4 +451,79 @@ export interface SwingEvaluation {
   is_demo: boolean;
   setups: SwingSetup[];
   strategies: { id: string; name: string }[];
+}
+
+/** A price with the reason it exists (trade-planning engine). */
+export interface PlanPrice {
+  price: number;
+  basis: string;
+  source?: string;
+  timeframe?: string | null;
+  strength?: number | null;
+  kind?: string;
+}
+
+export interface PlanCheck {
+  name: string;
+  passed: boolean | null;
+  detail: string;
+}
+
+export interface QualityComponent {
+  name: string;
+  weight: number;
+  value: number;
+  points: number;
+  detail: string;
+}
+
+/** Complete conditional trade plan from backend app/planning. */
+export interface TradePlan {
+  setup_id?: string;
+  ticker: string;
+  mode: "day" | "swing";
+  strategy: string;
+  strategy_name: string;
+  direction: "LONG" | "SHORT";
+  timeframe: string;
+  status: StrategyStatus;
+  reasons: string[];
+  entry_trigger: PlanPrice | null;
+  entry: PlanPrice | null;
+  entry_zone: { low: number; high: number; basis: string } | null;
+  stop: (PlanPrice & { anchor: number; buffer_atr: number; buffer: number }) | null;
+  target1: PlanPrice | null;
+  target2: PlanPrice | null;
+  risk_per_share: number | null;
+  reward_per_share_t1: number | null;
+  reward_per_share_t2: number | null;
+  risk_reward_t1: number | null;
+  risk_reward_t2: number | null;
+  risk_reward_worst_fill: number | null;
+  min_rr: number;
+  atr: { value: number | null; label: string };
+  confirmation: StrategyCondition[];
+  invalidation: string[];
+  conflicts: string[];
+  checks: PlanCheck[];
+  calculations: string[];
+  signal_time: number | null;
+  quality: {
+    score: number;
+    components: QualityComponent[];
+    conflict_penalty: number;
+    conflicts: string[];
+    note: string;
+  } | null;
+}
+
+export interface PlansResponse {
+  symbol: string;
+  mode: "day" | "swing";
+  plans: TradePlan[];
+  status: StrategyStatus;
+  reason: string | null;
+  evaluated_at?: string;
+  min_rr?: number;
+  is_demo: boolean;
 }

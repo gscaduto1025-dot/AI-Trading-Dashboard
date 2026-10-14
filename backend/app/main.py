@@ -34,6 +34,7 @@ from .market.timeframes import SPECS, lookback_start, spec
 from .strategies.common import TRIGGERED, signal_id
 from .strategies.config import DAY_TRADING_UNIVERSE, StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
+from .planning.config import PlanningConfig, load_planning_config
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
 from .swing.engine import SORT_KEYS, SWING_STRATEGIES, evaluate_swing_symbol, sort_setups
@@ -73,6 +74,7 @@ class Service:
         self.strategy_config: StrategyConfig = load_strategy_config()
         self._strategy_cache: dict[tuple, list[dict]] = {}
         self.swing_config: SwingConfig = load_swing_config()
+        self.planning_config: PlanningConfig = load_planning_config()
         self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
@@ -203,7 +205,8 @@ class Service:
             cached = self._strategy_cache.get(key)
             if cached is None:
                 ctx, result = evaluate_symbol(sym, frames, when, market.calendar,
-                                              self.strategy_config, problems)
+                                              self.strategy_config, problems,
+                                              planning=self.planning_config)
                 cached = [s.to_dict() for s in result]
                 self._strategy_cache = {k: v for k, v in self._strategy_cache.items()
                                         if k[0] != sym}  # keep only the newest per symbol
@@ -288,7 +291,8 @@ class Service:
             if cached is None:
                 _, cached = evaluate_swing_symbol(sym, frames, when, market.calendar,
                                                   self.swing_config, problems,
-                                                  is_demo=self.is_demo)
+                                                  is_demo=self.is_demo,
+                                                  planning=self.planning_config)
                 self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] != sym}
                 self._swing_cache[key] = cached
             setups += cached
@@ -350,20 +354,60 @@ class Service:
                 alerts.append(alert)
         return alerts
 
-    def strategy_summary(self, symbol: str, mode: str) -> list[dict]:
-        """Compact active setups for one symbol (context for the AI explanation)."""
+    def plans_for(self, symbol: str, mode: str, as_of: datetime | None = None) -> dict:
+        """Every trade plan for one symbol in one mode, active plans first by quality.
+        Day mode covers the day-trading universe only; other symbols get an explanation."""
+        symbol = self.market.check_symbol(symbol)
+        if mode == "swing":
+            res = self.swing_setups([symbol], as_of, record=False)
+        elif mode == "day":
+            if symbol not in self.day_universe:
+                return {"symbol": symbol, "mode": mode, "plans": [], "status": "NO_TRADE",
+                        "reason": f"{symbol} is not in the day-trading universe "
+                                  f"({', '.join(self.day_universe)}): no day setups are scanned.",
+                        "is_demo": self.is_demo}
+            res = self.strategy_setups([symbol], as_of, record=False)
+        else:
+            raise InvalidRequest("mode must be day or swing")
+        sym_state = res["symbols"].get(symbol, {})
+        if sym_state.get("status") == "unavailable":
+            return {"symbol": symbol, "mode": mode, "plans": [], "status": "NO_TRADE",
+                    "reason": f"MARKET DATA UNAVAILABLE: {sym_state.get('error')}",
+                    "is_demo": self.is_demo}
+        order = {"TRIGGERED": 0, "WATCHING": 1, "NO_TRADE": 2}
+        rows = [r for r in res["setups"] if r["ticker"] == symbol and r.get("plan")]
+        rows.sort(key=lambda r: (order[r["status"]], r["plan"]["entry_trigger"] is None,
+                                 -(r["plan"]["quality"]["score"])))
+        plans = [{"setup_id": r["id"], **r["plan"]} for r in rows]
+        best = plans[0]["status"] if plans else "NO_TRADE"
+        reason = None if best != "NO_TRADE" else (
+            "No setup passes every planning rule. " +
+            (plans[0]["reasons"][0] if plans and plans[0]["reasons"] else ""))
+        return {"symbol": symbol, "mode": mode, "plans": plans, "status": best,
+                "reason": reason, "evaluated_at": res["evaluated_at"],
+                "min_rr": self.planning_config.min_rr_for(mode), "is_demo": self.is_demo}
+
+    def strategy_summary(self, symbol: str, mode: str) -> tuple[list[dict], str]:
+        """Compact trade plans for one symbol (context for the AI explanation) and the best
+        plan status, which caps the AI verdict."""
         try:
-            if mode == "swing":
-                rows = self.swing_setups([symbol], record=False)["setups"]
-            elif symbol.upper() in self.day_universe:
-                rows = self.strategy_setups([symbol], record=False)["setups"]
-            else:
-                return []
+            res = self.plans_for(symbol, mode)
         except DataError:
-            return []
-        keys = ("strategy_name", "direction", "timeframe", "status", "entry", "stop",
-                "target1", "target2", "risk_reward", "reasons")
-        return [{k: s.get(k) for k in keys} for s in rows if s["status"] != "NO_TRADE"][:6]
+            return [], "NO_TRADE"
+        keys = ("strategy_name", "direction", "timeframe", "status", "risk_per_share",
+                "reward_per_share_t1", "risk_reward_t1", "risk_reward_t2", "reasons")
+        out = []
+        for p in res["plans"]:
+            if p["status"] == "NO_TRADE" and len(out) >= 3:
+                continue
+            row = {k: p.get(k) for k in keys}
+            for k in ("entry_trigger", "entry", "stop", "target1", "target2"):
+                row[k] = {"price": p[k]["price"], "basis": p[k]["basis"]} if p.get(k) else None
+            row["quality_score"] = p["quality"]["score"] if p.get("quality") else None
+            out.append(row)
+            if len(out) >= 6:
+                break
+        return out, res["status"]
 
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
         results, alerts, errors = [], [], []
@@ -590,7 +634,7 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             return {"available": False, "reason": f"Analysis paused: {exc.message}"}
         except (DataError, ValueError) as exc:
             return {"available": False, "reason": f"MARKET DATA UNAVAILABLE: {exc}"}
-        a["strategy_setups"] = s.strategy_summary(a["symbol"], mode)
+        a["strategy_setups"], a["plan_status"] = s.strategy_summary(a["symbol"], mode)
         feed = s.market.feed.id
         sig = "|".join(f"{x['strategy_name']}:{x['direction']}:{x['timeframe']}:{x['status']}"
                        for x in a["strategy_setups"])
@@ -602,7 +646,7 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             result = s.analyst.explain(a, recent, s.is_demo)
         except AIUnavailable as exc:
             return {"available": False, "reason": str(exc)}
-        result["engine_status"] = a["setup"]["status"]
+        result["engine_status"] = a["plan_status"]
         result["is_demo"] = s.is_demo
         s.db.put_ai(cache_key, result)
         return {"available": True, "cached": False, "as_of": a["as_of"], **result}
@@ -649,6 +693,23 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                 "definitions": [{"id": st.id, "name": st.name,
                                  "rules": inspect.getmodule(st).__doc__.strip()}
                                 for st in SWING_STRATEGIES]}
+
+    @app.get("/api/plans/{symbol}")
+    def trade_plans(symbol: str, mode: str = "day", as_of: str | None = None) -> dict:
+        """Complete conditional trade plans for every setup on one symbol in one mode."""
+        when = _parse_dt(as_of) if as_of else None
+        try:
+            return svc().plans_for(symbol, mode, when)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+
+    @app.get("/api/planning/config")
+    def planning_config() -> dict:
+        from .planning import plan as plan_mod
+        return {"config": svc().planning_config.to_dict(),
+                "rules": plan_mod.__doc__.strip(),
+                "quality_note": "Setup quality is a transparent ranking of supporting "
+                                "evidence (weights above), not a predicted win probability."}
 
     @app.get("/api/strategies/signals")
     def strategy_signals(limit: int = Query(100, ge=1, le=500), ticker: str | None = None) -> dict:

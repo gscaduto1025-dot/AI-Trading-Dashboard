@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from ..market.timeframes import spec
-from .base import Strategy, StrategyResult, accept, sgn
+from .base import Strategy, StrategyResult, accept, ref, sgn
 from .common import LONG, Condition, StrategyContext, TFData, fmt, hhmm_to_ts
 
 
@@ -26,6 +26,15 @@ class OpeningRangeBreakout(Strategy):
     id = "opening_range_breakout"
     name = "Opening range breakout"
     config_key = "opening_range_breakout"
+
+    @staticmethod
+    def _anchor(orh, orl, direction, cfg, tfd):
+        if cfg.stop_mode == "midpoint":
+            return ref((orh + orl) / 2, f"Opening-range midpoint {(orh + orl) / 2:.2f}", "range",
+                       tfd.tf)
+        p = orl if direction == LONG else orh
+        return ref(p, f"Opposite side of the opening range "
+                      f"({'ORL' if direction == LONG else 'ORH'} {p:.2f})", "range", tfd.tf)
 
     def evaluate(self, ctx: StrategyContext, tfd: TFData, direction: str) -> StrategyResult:
         cfg = ctx.config.opening_range_breakout
@@ -103,7 +112,13 @@ class OpeningRangeBreakout(Strategy):
                                                       True, f"ORH {orh:.2f} / ORL {orl:.2f}"),
                                             Condition("Confirmed breakout", False, True, "pending")],
                              "levels": [or_level], "entry": edge,
-                             "invalidation": [f"No breakout by {cfg.latest_breakout_time} ET."]}
+                             "invalidation": [f"No breakout by {cfg.latest_breakout_time} ET."],
+                             "trigger": ref(edge, f"{tfd.tf} close {'above ORH' if direction == LONG else 'below ORL'} "
+                                                  f"{edge:.2f} (+{cfg.breakout_buffer_atr} ATR) before "
+                                                  f"{cfg.latest_breakout_time} ET", "opening_range", tfd.tf),
+                             "stop_anchor": self._anchor(orh, orl, direction, cfg, tfd),
+                             "extra": [(edge + s * m * (orh - orl), f"{m:g}x opening-range measured move")
+                                       for m in cfg.measured_move_multiples]}
             else:
                 res.reasons.append(f"No confirmed opening-range breakout before "
                                    f"{cfg.latest_breakout_time} ET.")
@@ -116,8 +131,6 @@ class OpeningRangeBreakout(Strategy):
         i = first_i
         b = bars[i]
         atr = tfd.atr_before(i)
-        anchor = (orh + orl) / 2 if cfg.stop_mode == "midpoint" else (orl if direction == LONG else orh)
-        stop = anchor - s * ctx.config.targets.stop_buffer_atr * atr
         extra = [(b.close + s * m * width, f"{m:g}x opening-range measured move")
                  for m in cfg.measured_move_multiples]
         rv = tfd.relvol[i]
@@ -142,10 +155,13 @@ class OpeningRangeBreakout(Strategy):
         if retest:
             ev.append({"time": retest.time, "kind": "retest held (informational)",
                        "price": retest.low if direction == LONG else retest.high})
+        anchor = self._anchor(orh, orl, direction, cfg, tfd)
         inv = [f"A close back inside the range ({'below' if direction == LONG else 'above'} "
-               f"{edge:.2f}) weakens the breakout; stop {stop:.2f} "
-               f"({cfg.stop_mode} of the range)."]
-        res.triggers.append(accept(ctx, tfd, i, direction, b.close, stop, conds, ev, [or_level],
-                                   inv, extra))
+               f"{edge:.2f}) weakens the breakout; a move through {anchor.price:.2f} "
+               f"({cfg.stop_mode} of the range) invalidates it."]
+        trig = ref(edge, f"{tfd.tf} close {'above ORH' if direction == LONG else 'below ORL'} "
+                         f"{edge:.2f} by {cfg.breakout_buffer_atr} ATR", "opening_range", tfd.tf)
+        res.triggers.append(accept(ctx, tfd, i, direction, trig, anchor, conds, ev, [or_level],
+                                   inv, extra, strategy_id=self.id))
         res.reasons += weak[-1:]
         return res

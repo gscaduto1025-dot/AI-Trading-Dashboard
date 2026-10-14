@@ -82,7 +82,6 @@ class SRReversal(SwingStrategy):
         n = len(bars)
         window = cfg.confirm_window[d.tf]
         word = "support" if direction == LONG else "resistance"
-        buf = ctx.config.targets.stop_buffer_atr
         pending = None
         for r in range(max(start - window, 21), n):
             pattern = reversal_pattern(d, r, direction, cfg)
@@ -113,8 +112,6 @@ class SRReversal(SwingStrategy):
                 continue
             i = confirmed
             b = bars[i]
-            atr = d.atr_before(i)
-            stop = ext - s * buf * atr
             htf = ctx.htf(d.tf, i)
             sup = ctx.supporting(d.end[i])
             conds = [
@@ -140,7 +137,7 @@ class SRReversal(SwingStrategy):
                           f"4H {sup.get('4Hour', 'n/a')}, 1H {sup.get('1Hour', 'n/a')}"),
             ]
             res.triggers.append(accept(
-                ctx, d, i, direction, trig, stop, conds,
+                ctx, d, i, direction, trig, ext, conds,
                 [{"time": rb.time, "kind": f"reversal candle ({pattern})",
                   "price": rb.low if direction == LONG else rb.high},
                  {"time": b.time, "kind": "confirmation close", "price": b.close}] +
@@ -149,12 +146,16 @@ class SRReversal(SwingStrategy):
                 [zone_ref(z, ztf)],
                 [f"A close {'below' if direction == LONG else 'above'} {ext:.2f} "
                  f"(the reversal candle's {'low' if direction == LONG else 'high'}) "
-                 f"invalidates the reversal."], ext))
+                 f"invalidates the reversal."], ext,
+                trigger_basis=f"{fmt_day(b.time)} close {'above' if direction == LONG else 'below'} the "
+                              f"{pattern} candle's {'high' if direction == LONG else 'low'} {trig:.2f} "
+                              f"({fmt_day(rb.time)})",
+                anchor_basis=f"Rejection wick {'low' if direction == LONG else 'high'} {ext:.2f} "
+                             f"({fmt_day(rb.time)}) inside the {word} zone", strategy_id=self.id))
         if pending:
             r, z, ztf, pattern, trig, ext = pending
-            atr = d.atr_before(n)
             res.watch = watch_plan(
-                ctx, d, direction, trig, ext - s * buf * atr,
+                ctx, d, direction, trig, ext,
                 [Condition(f"{'Weekly' if ztf == '1Week' else 'Daily'} {word} zone", True, True,
                            f"{z.low:.2f}-{z.high:.2f}, {len(z.pivots)} reactions"),
                  Condition(f"Reversal candle ({pattern})", True, True, fmt_day(bars[r].time)),
@@ -164,7 +165,11 @@ class SRReversal(SwingStrategy):
                 [f"{pattern.capitalize()} at {word} {z.low:.2f}-{z.high:.2f} on "
                  f"{fmt_day(bars[r].time)}; waiting for a confirming close beyond {trig:.2f}."],
                 [zone_ref(z, ztf)],
-                [f"A close {'below' if direction == LONG else 'above'} {ext:.2f}."])
+                [f"A close {'below' if direction == LONG else 'above'} {ext:.2f}."],
+                trigger_basis=f"Close {'above' if direction == LONG else 'below'} the {pattern} candle's "
+                              f"{'high' if direction == LONG else 'low'} {trig:.2f} within {window} candle(s)",
+                anchor_basis=f"Rejection wick {'low' if direction == LONG else 'high'} {ext:.2f}",
+                strategy_id=self.id)
         if not res.triggers and not res.watch:
             c = bars[-1].close if bars else 0
             atr = d.atr_before(n) if n else 0

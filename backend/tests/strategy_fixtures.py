@@ -18,12 +18,17 @@ from datetime import date, datetime, timedelta
 
 from app.data.base import Bar
 from app.market.calendar import NY, MarketCalendar
+from app.planning.config import PlanningConfig
 from app.strategies.config import StrategyConfig
 from app.strategies.engine import evaluate_symbol
 
 CAL = MarketCalendar()
 PREV, DAY = date(2026, 3, 9), date(2026, 3, 10)
 PDH, PDL = 101.0, 99.0
+# The hand-built sessions have few levels above/below, so most targets are ATR projections.
+# Pattern-detection tests therefore plan with min_rr 1.0; the 2:1 default and every other
+# planning rule are tested in test_planning.py.
+PATTERN_PLANNING = PlanningConfig(min_rr=1.0)
 
 
 def t(day: date, hh: int, mm: int) -> int:
@@ -90,10 +95,11 @@ def after_bars(n: int) -> datetime:
 
 
 def run(today_rows, as_of=None, trend="up", cfg: StrategyConfig | None = None,
-        problems=None, daily_volume=1e6):
+        problems=None, daily_volume=1e6, planning: PlanningConfig | None = None):
     as_of = as_of or after_bars(len(today_rows))
     ctx, setups = evaluate_symbol("TEST", frames(today_rows, trend, daily_volume), as_of, CAL,
-                                  cfg or StrategyConfig(), problems)
+                                  cfg or StrategyConfig(), problems,
+                                  planning=planning or PATTERN_PLANNING)
     return ctx, setups
 
 
@@ -106,5 +112,5 @@ def bar_time(n: int) -> int:
     return t(DAY, 9, 30) + n * 300
 
 
-__all__ = ["run", "pick", "after_bars", "bar_time", "frames", "PDH", "PDL", "DAY", "CAL",
+__all__ = ["run", "pick", "PATTERN_PLANNING", "after_bars", "bar_time", "frames", "PDH", "PDL", "DAY", "CAL",
            "timedelta"]
