@@ -42,16 +42,18 @@ export const STATUS_LABEL: Record<SetupStatus, string> = {
   ACTIONABLE: "Actionable",
   FORMING: "Forming",
   NO_TRADE: "No Trade",
+  TRIGGERED: "Triggered",
+  WATCHING: "Watching",
 };
 
 /** Tailwind classes per status: green/red for direction, amber/gray for incomplete. */
 export function statusClasses(status: SetupStatus, direction: "long" | "short" | null) {
-  if (status === "ACTIONABLE") {
+  if (status === "ACTIONABLE" || status === "TRIGGERED") {
     return direction === "short"
       ? "bg-bear/15 text-bear ring-bear/40"
       : "bg-bull/15 text-bull ring-bull/40";
   }
-  if (status === "FORMING") return "bg-wait/10 text-wait ring-wait/30";
+  if (status === "FORMING" || status === "WATCHING") return "bg-wait/10 text-wait ring-wait/30";
   return "bg-white/5 text-muted ring-line-strong";
 }
 

@@ -112,6 +112,9 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   401/403, the rate limiter, the regular vs extended session, 1H/4H anchoring, early closes,
   holidays, stale-feed detection, delayed-SIP cutoffs, corrupt candles, caching, pre-market
   quote math, calendar fallback, and the API's unavailable/history/CSV responses.
+- **Strategy engine** (`tests/test_strategies.py`): positive, negative and edge cases for each
+  strategy, the gates, candle-by-candle no-repainting checks, future-candle checks,
+  determinism, independence and the API.
 - **Key-level engine** (`tests/test_key_levels.py`): real AAPL/GOOG fixtures against
   independent reference implementations, no-look-ahead checks, splits, and hand-computed
   intraday fixtures (see the key-level section below).
@@ -191,6 +194,73 @@ frontend/src/components/
 | Swing Trading | suggested 1H, 4H, 1D, 1W | EMA 20/50, SMA 200, 20-bar and 52-week high/low | 2.0 : 1 |
 
 Any timeframe can be charted in either mode. The mode only changes the analysis parameters.
+
+### Day-trading strategy engine (`backend/app/strategies`)
+
+The engine evaluates SPY, QQQ, NVDA, TSLA, AAPL, AMD and MSFT on **5-minute and
+15-minute** candles, using **1-hour and daily** candles for higher-timeframe context. Each
+of the five strategies runs independently for each symbol × timeframe × direction and
+returns a status:
+
+| Status | Meaning |
+| --- | --- |
+| **TRIGGERED** | Every strategy-specific condition was met on a *completed* candle, the candle was inside the entry window and not abnormal, and reward/risk to T1 is at least `min_rr`. |
+| **WATCHING** | The pattern is developing while the session is open (for example a breakout waiting for its retest). |
+| **NO_TRADE** | Requirements not met, with the reasons listed. |
+
+Each setup returns:
+- the ticker, strategy, direction, timeframe and higher-timeframe bias;
+- its status, entry, stop, T1 and T2, and reward/risk;
+- the supporting key levels;
+- every confirmation condition (pass, fail or n/a, with the candle it was checked on);
+- the invalidation rules and the evidence events.
+
+`GET /api/strategies/setups[?symbol=&as_of=]`, `GET /api/strategies/config` (all
+thresholds plus each strategy's rule text), `GET /api/strategies/signals` (the immutable log
+of every accepted trigger; each new one also raises an alert).
+
+**Rules** (all thresholds in `app/strategies/config.py`; override them with
+`backend/strategies.json`, see `strategies.example.json`). ATR is the strategy timeframe's
+14-candle ATR at the candle *before* the one being judged.
+
+| Strategy | Trigger (on a completed candle) | Stop / targets |
+| --- | --- | --- |
+| **Breakout & retest** | A close beyond a confirmed zone, or PDH/PDL/PWH/PWL ± 0.1 ATR, by 0.1 ATR (previous close not beyond) with relative volume ≥ 1.5 when volume exists. Within 12 candles, a wick back to within 0.15 ATR of the broken edge without closing back through. Within 3 candles, a close beyond the retest candle's high (long) or low (short). | Beyond the retest extreme and the zone, + 0.1 ATR. A close back through the zone invalidates. |
+| **Opening range breakout** | A 15- or 30-minute range (every candle present, width 0.1–1.2 daily ATR). The first close beyond it by 0.05 ATR with relative volume ≥ 1.2 (vs the same time of day), before 11:30 ET. | Range midpoint (or the opposite side) − 0.1 ATR. Targets: key levels or 1×/2× range measured moves. A retest is reported for information. |
+| **Liquidity sweep reversal** | A previously confirmed high or low is traded through by 0.05–1.0 ATR. Candidates: PDH/PDL, PWH/PWL, valid swings, liquidity areas, or intraday swings once confirmed and at least 6 candles old. Within 3 candles, a close back inside on a reversal candle (bearish, close in the lower half; mirrored for longs). | Sweep extreme + 0.1 ATR. |
+| **Trend pullback** | The higher-timeframe bias matches the direction (daily and 1-hour close vs EMA20 vs EMA50; if they disagree it's neutral). EMA9 vs EMA20 and close vs VWAP are aligned. At least 2 consecutive lower highs into a touch of VWAP, EMA20 or a support zone (within 0.1 ATR, without closing more than 0.25 ATR through it). Then a bullish close above the prior candle's high. | Pullback low − 0.1 ATR. An indicator alone never triggers. |
+| **S/R rejection** | Price enters a zone (strength ≥ 35, or PDH/PWH, PDL/PWL) from outside without closing through it, on a pin bar (wick ≥ 2× body and ≥ 50% of the range, close in the outer 40%) or an engulfing candle. Within 2 candles, a close beyond the rejection candle's low (short) or high (long). | Beyond the rejection extreme and the zone. A close through the zone invalidates. |
+
+**Targets** (all strategies): T1 is the first key level (or strategy-specific candidate) at
+least 1R away. T2 is the next level at least 0.5R beyond T1. When no level qualifies, the
+measured fallbacks are 1.5R and 3R. Each target's basis is returned.
+
+**Gates.** No strategy triggers when any of these apply:
+- Data is stale, unavailable or fails validation.
+- 20-day average dollar volume is below $20M, or more than 20% of the session's candle
+  slots have no trades.
+- The session opened more than 3 daily ATR away from the prior close.
+- The trigger candle is wider than 4 ATR, or follows 3 or more empty slots (a possible
+  halt).
+- The trigger candle closes in the first 5 minutes, or within 30 minutes of the close
+  (early-close days included).
+
+**No look-ahead, no repainting.**
+- Only candles closed by `as_of` exist in the context, and every series (ATR, EMA, VWAP,
+  time-of-day relative volume, 1-hour bias) is causal.
+- Key levels come from prior sessions as of 09:30. Intraday levels are derived as the scan
+  moves forward.
+- Strategies scan the session candle by candle, so a trigger is fixed once emitted. Later
+  candles only add an informational `outcome` (open / target 1 / target 2 / stopped).
+- Tests replay a session one candle at a time and assert triggers only accumulate, appear
+  exactly when their confirmation candle closes, and never change. Tests also check that
+  future candles change nothing and that results are identical across runs.
+- Removing the completed-candle cutoff makes those tests fail.
+
+On the dashboard, the **Day-Trading Setups** panel lists TRIGGERED and WATCHING setups
+(tick "no-trade" to see the rest). Clicking one loads its symbol and timeframe, draws its
+entry, stop, targets, supporting levels and evidence on the chart, and opens the **Setup
+Detail** panel with every condition.
 
 ### Key-level engine (`backend/app/levels`)
 
@@ -329,6 +399,8 @@ notifications for actionable setups.
 | GET | `/api/market/status` | session phase, holiday/early close, next open/close, calendar source |
 | GET | `/api/watchlist` | quotes: price, change, volume, last-trade time, latency |
 | GET | `/api/bars/{symbol}?timeframe=5Min&session=regular\|extended&limit=300` | candles + completion + data status + quality report |
+| GET | `/api/strategies/setups[?symbol=SPY&as_of=ISO]` | day-trading strategy setups (TRIGGERED / WATCHING / NO_TRADE) |
+| GET | `/api/strategies/config` · `/api/strategies/signals` | strategy thresholds and rules · immutable trigger log |
 | GET | `/api/levels/{symbol}?mode=day&timeframe=5Min[&as_of=2026-03-05T12:00]` | automatic key levels with evidence, strength, validity (point-in-time replay with `as_of`) |
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |

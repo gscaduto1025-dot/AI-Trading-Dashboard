@@ -19,7 +19,7 @@ import {
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef } from "react";
-import type { Analysis, Bar, KeyLevel, KeyLevelReport } from "@/lib/types";
+import type { Analysis, Bar, KeyLevel, KeyLevelReport, StrategySetup } from "@/lib/types";
 import { type Band, ZoneBands } from "./chartPrimitives";
 
 export interface ChartToggles {
@@ -121,10 +121,13 @@ export default function PriceChart({
   isDemo,
   lastComplete,
   viewKey,
+  focus = null,
 }: {
   bars: Bar[];
   analysis: Analysis | null;
   keyLevels: KeyLevelReport | null;
+  /** A selected strategy setup: its plan, levels and evidence replace the general plan. */
+  focus?: StrategySetup | null;
   toggles: ChartToggles;
   isDemo: boolean;
   /** False when the newest candle is still forming; it is drawn translucent. */
@@ -292,8 +295,14 @@ export default function PriceChart({
 
   // Zones and liquidity as shaded bands.
   useEffect(() => {
-    bandsRef.current?.setBands(keyLevels ? zoneBands(keyLevels, toggles) : []);
-  }, [keyLevels, toggles]);
+    const bands = keyLevels ? zoneBands(keyLevels, toggles) : [];
+    for (const l of focus?.supporting_levels ?? []) {
+      if (l.high - l.low > 1e-9) {
+        bands.push({ low: l.low, high: l.high, fill: "rgba(79,156,249,0.10)", border: "rgba(79,156,249,0.8)", label: `Setup level: ${l.label}` });
+      }
+    }
+    bandsRef.current?.setBands(bands);
+  }, [keyLevels, toggles, focus]);
 
   // Swing markers and breakout markers.
   useEffect(() => {
@@ -328,9 +337,20 @@ export default function PriceChart({
         });
       }
     }
+    for (const e of focus?.evidence ?? []) {
+      if (!times.has(e.time)) continue;
+      const up = focus?.direction === "LONG";
+      markers.push({
+        time: ts(e.time),
+        position: up ? "belowBar" : "aboveBar",
+        shape: e.kind.includes("confirm") || e.kind.includes("close") || e.kind === "breakout" ? (up ? "arrowUp" : "arrowDown") : "square",
+        color: "#4f9cf9",
+        text: e.kind.split(" ")[0],
+      });
+    }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     plugin.setMarkers(markers);
-  }, [bars, keyLevels, toggles.swings, toggles.breakouts]);
+  }, [bars, keyLevels, toggles.swings, toggles.breakouts, focus]);
 
   // Price lines: previous highs/lows, session levels, breakout levels, trade plan.
   useEffect(() => {
@@ -357,13 +377,25 @@ export default function PriceChart({
       if (l.category === "breakout" && l.valid && toggles.breakouts)
         add(l.price, l.type === "BREAKOUT" ? LEVEL_STYLE.breakout : LEVEL_STYLE.breakdown, l.type === "BREAKOUT" ? "BO" : "BD", LineStyle.Solid, 2);
     }
+    if (focus) {
+      for (const l of focus.supporting_levels) {
+        if (l.high - l.low <= 1e-9) add(l.low, "rgba(79,156,249,0.8)", l.label.slice(0, 18), LineStyle.Dotted, 1);
+      }
+      if (focus.entry !== null && focus.stop !== null) {
+        add(focus.entry, "#4f9cf9", `${focus.direction} entry`, LineStyle.Solid, 2);
+        add(focus.stop, COLORS.bear, "Stop", LineStyle.Solid, 2);
+        if (focus.target1 !== null) add(focus.target1, COLORS.bull, "T1", LineStyle.LargeDashed, 2);
+        if (focus.target2 !== null) add(focus.target2, COLORS.bull, "T2", LineStyle.LargeDashed, 2);
+      }
+      return; // the selected setup replaces the general trade plan
+    }
     const s = analysis?.setup;
     if (s && toggles.plan && s.status !== "NO_TRADE" && s.entry !== null && s.stop !== null) {
       add(s.entry, "#4f9cf9", "Entry", LineStyle.Solid, 2);
       add(s.stop, COLORS.bear, "Stop", LineStyle.Solid, 2);
       s.targets.forEach((t, i) => add(t, COLORS.bull, `T${i + 1}`, LineStyle.LargeDashed, 2));
     }
-  }, [analysis, keyLevels, toggles.prevHighLow, toggles.session, toggles.breakouts, toggles.plan]);
+  }, [analysis, keyLevels, toggles.prevHighLow, toggles.session, toggles.breakouts, toggles.plan, focus]);
 
   return (
     <div className="relative h-full w-full">

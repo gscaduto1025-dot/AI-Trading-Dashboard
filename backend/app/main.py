@@ -31,6 +31,9 @@ from .market.sources import AlpacaSource
 from .levels.engine import InsufficientData, compute_key_levels
 from .levels.model import FETCH_LIMIT, MODE_FRAMES
 from .market.timeframes import SPECS, lookback_start, spec
+from .strategies.common import TRIGGERED, signal_id
+from .strategies.config import DAY_TRADING_UNIVERSE, StrategyConfig, load_strategy_config
+from .strategies.engine import STRATEGIES, evaluate_symbol
 
 log = logging.getLogger("tradescope")
 
@@ -64,6 +67,8 @@ class Service:
         self.analyst = analyst or ClaudeAnalyst(settings.claude_model, settings.claude_effort)
         self.ai_enabled = settings.anthropic_api_key_present or analyst is not None
         self.last_scan: int | None = None
+        self.strategy_config: StrategyConfig = load_strategy_config()
+        self._strategy_cache: dict[tuple, list[dict]] = {}
 
     @property
     def is_demo(self) -> bool:
@@ -161,8 +166,99 @@ class Service:
         result["key_levels_error"] = levels_error
         return result
 
+    # ------------------------------------------------------- day-trading strategies
+
+    STRATEGY_FRAMES = {"5Min": 600, "15Min": 400, "1Hour": 500, "1Day": 500, "1Week": 260}
+
+    @property
+    def day_universe(self) -> list[str]:
+        return [s for s in DAY_TRADING_UNIVERSE if s in self.market.symbols]
+
+    def strategy_setups(self, symbols: list[str] | None = None,
+                        as_of: datetime | None = None, record: bool = True) -> dict:
+        """Evaluate every strategy for the day-trading universe at `as_of` (default: the
+        feed's data cutoff). Results for a symbol are cached until a new 5- or 15-minute
+        candle closes, so repeated polling is cheap and identical (deterministic)."""
+        market = self.market
+        symbols = [market.check_symbol(s) for s in (symbols or self.day_universe)]
+        when = market.cutoff() if as_of is None else min(as_of, market.cutoff())
+        setups: list[dict] = []
+        per_symbol: dict[str, dict] = {}
+        new_alerts: list[dict] = []
+        for sym in symbols:
+            try:
+                frames, problems = self._strategy_frames(sym, when, as_of is not None)
+            except DataError as exc:
+                per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
+                continue
+            key = (sym, when.timestamp() if as_of is not None else None,
+                   *(frames[tf][-1].time if frames.get(tf) else 0 for tf in ("5Min", "15Min")),
+                   when < market.calendar.last_session_started(when, "regular").close,
+                   tuple(problems))
+            cached = self._strategy_cache.get(key)
+            if cached is None:
+                ctx, result = evaluate_symbol(sym, frames, when, market.calendar,
+                                              self.strategy_config, problems)
+                cached = [s.to_dict() for s in result]
+                self._strategy_cache = {k: v for k, v in self._strategy_cache.items()
+                                        if k[0] != sym}  # keep only the newest per symbol
+                self._strategy_cache[key] = cached
+            for s in cached:
+                s["is_demo"] = self.is_demo
+            setups += cached
+            per_symbol[sym] = {"status": "ok", "gate_reasons": next(
+                (s["reasons"] for s in cached if s["status"] == "NO_TRADE" and problems), []),
+                "triggered": sum(s["status"] == TRIGGERED for s in cached),
+                "watching": sum(s["status"] == "WATCHING" for s in cached)}
+            if record and as_of is None:
+                new_alerts += self._record_signals(cached)
+        order = {"TRIGGERED": 0, "WATCHING": 1, "NO_TRADE": 2}
+        setups.sort(key=lambda s: (order[s["status"]], -(s["confirmed_at"] or 0), s["ticker"],
+                                   s["strategy"], s["timeframe"], s["direction"]))
+        return {"evaluated_at": when.astimezone(NY).isoformat(), "replay": as_of is not None,
+                "universe": symbols, "timeframes": ["5Min", "15Min"],
+                "context_timeframes": ["1Hour", "1Day"], "symbols": per_symbol,
+                "is_demo": self.is_demo, "setups": setups, "new_alerts": new_alerts,
+                "strategies": [{"id": st.id, "name": st.name} for st in STRATEGIES]}
+
+    def _strategy_frames(self, sym: str, when: datetime, replay: bool):
+        market = self.market
+        frames, problems = {}, []
+        for tf, limit in self.STRATEGY_FRAMES.items():
+            if replay:
+                start = lookback_start(spec(tf), market.calendar, when, limit, "regular")
+                frames[tf] = market.get_history(sym, tf, start, when).bars
+                continue
+            candles = market.get_candles(sym, tf, "regular", limit)
+            block = candles.analysis_block()
+            if block and block[0] != "INSUFFICIENT_DATA":
+                problems.append(f"{SPECS[tf].label} data: {block[1]}")
+            frames[tf] = candles.bars
+        return frames, problems
+
+    def _record_signals(self, setups: list[dict]) -> list[dict]:
+        """Append every accepted trigger to the immutable signal log (alerts on new ones)."""
+        names = {st.id: st.name for st in STRATEGIES}
+        alerts = []
+        for s in setups:
+            for t in s.get("triggers_today", []):
+                if not t["accepted"]:
+                    continue
+                sid = signal_id(s["ticker"], s["strategy"], s["timeframe"], s["direction"],
+                                s["session_date"], t["time"])
+                payload = s if s["trigger_time"] == t["time"] else {**s, "note": "earlier trigger"}
+                alert = self.db.record_signal(sid, payload, t, self.is_demo, names[s["strategy"]])
+                if alert:
+                    alerts.append(alert)
+        return alerts
+
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
         results, alerts, errors = [], [], []
+        try:
+            alerts += self.strategy_setups()["new_alerts"]
+        except DataError as exc:
+            errors.append({"symbol": "*", "mode": "strategies", "code": exc.code,
+                           "error": str(exc)})
         for mode in modes:
             timeframe = DEFAULT_TIMEFRAME[mode]
             for symbol in self.settings.watchlist:
@@ -392,6 +488,29 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     @app.post("/api/scan")
     def scan() -> dict:
         return svc().scan()
+
+    @app.get("/api/strategies/setups")
+    def strategy_setups(symbol: str | None = None, as_of: str | None = None) -> dict:
+        """Current day-trading setups (TRIGGERED / WATCHING / NO_TRADE) for the universe."""
+        when = _parse_dt(as_of) if as_of else None
+        try:
+            return svc().strategy_setups([symbol] if symbol else None, when)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+
+    @app.get("/api/strategies/config")
+    def strategy_config() -> dict:
+        import inspect
+        from .strategies import engine as eng
+        return {"config": svc().strategy_config.to_dict(),
+                "universe": svc().day_universe,
+                "definitions": [{"id": s.id, "name": s.name,
+                                 "rules": inspect.getmodule(s).__doc__.strip()}
+                                for s in eng.STRATEGIES]}
+
+    @app.get("/api/strategies/signals")
+    def strategy_signals(limit: int = Query(100, ge=1, le=500), ticker: str | None = None) -> dict:
+        return {"signals": svc().db.signals(limit, ticker.upper() if ticker else None)}
 
     @app.get("/api/setups/recent")
     def recent_setups(limit: int = Query(25, ge=1, le=200), mode: str | None = None) -> dict:

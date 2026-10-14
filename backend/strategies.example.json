@@ -1,0 +1,6 @@
+{
+  "targets": {"min_rr": 1.5},
+  "opening_range_breakout": {"range_minutes": 30, "latest_breakout_time": "11:00"},
+  "trend_pullback": {"require_htf_alignment": true},
+  "liquidity_sweep": {"include_intraday_swings": false}
+}

@@ -16,6 +16,8 @@ import type {
   Quote,
   RecordedSetup,
   SessionKind,
+  StrategyEvaluation,
+  StrategySetup,
 } from "@/lib/types";
 import AIPanel from "./AIPanel";
 import AlertsPanel from "./AlertsPanel";
@@ -25,6 +27,8 @@ import MarketStatusBar from "./MarketStatusBar";
 import PriceChart, { type ChartToggles } from "./PriceChart";
 import RecentSetups from "./RecentSetups";
 import SetupPanel from "./SetupPanel";
+import StrategyDetail from "./StrategyDetail";
+import StrategySetupsPanel from "./StrategySetupsPanel";
 import Watchlist from "./Watchlist";
 import { DataUnavailable, DemoTag, Panel } from "./ui";
 
@@ -85,6 +89,9 @@ export default function Dashboard() {
   const [aiState, setAiState] = useState<{ key: string; result: AIResult } | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [setups, setSetups] = useState<RecordedSetup[] | null>(null);
+  const [strategies, setStrategies] = useState<StrategyEvaluation | null>(null);
+  const [strategiesError, setStrategiesError] = useState<string | null>(null);
+  const [selectedSetupId, setSelectedSetupId] = useState<string | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [notify, setNotify] = useState(false);
@@ -206,6 +213,33 @@ export default function Dashboard() {
     const t = setInterval(loadChart, chartRefreshMs);
     return () => clearInterval(t);
   }, [loadChart, chartRefreshMs, health !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Strategy engine: re-evaluated server-side when a new 5m/15m candle closes.
+  const strategyRefreshMs = isDemo ? 60_000 : phase === "closed" ? 120_000 : 20_000;
+  usePolling(
+    () => {
+      api
+        .strategySetups()
+        .then((r) => {
+          setStrategies(r);
+          setStrategiesError(null);
+        })
+        .catch((e) => setStrategiesError(errorText(e)));
+    },
+    strategyRefreshMs,
+    [strategyRefreshMs, health !== null],
+  );
+  // Resolve the selection against the latest evaluation so its status stays current.
+  const selectedSetup: StrategySetup | null =
+    strategies?.setups.find((x) => x.id === selectedSetupId) ?? null;
+
+  const selectStrategySetup = (st: StrategySetup) => {
+    setSelectedSetupId(st.id);
+    setSymbol(st.ticker);
+    setMode("day");
+    setTimeframe(st.timeframe);
+    setSession("regular");
+  };
 
   const loadFeeds = useCallback(() => {
     api.recentSetups(30).then((r) => setSetups(r.setups)).catch(() => {});
@@ -405,7 +439,10 @@ export default function Dashboard() {
           <Watchlist
             quotes={quotes}
             selected={symbol}
-            onSelect={setSymbol}
+            onSelect={(sym) => {
+              setSelectedSetupId(null);
+              setSymbol(sym);
+            }}
             isDemo={isDemo}
             error={quotesError}
             symbols={health?.watchlist ?? DEFAULT_SYMBOLS}
@@ -487,6 +524,7 @@ export default function Dashboard() {
                 bars={candles?.bars ?? []}
                 analysis={analysis}
                 keyLevels={keyLevels}
+                focus={selectedSetup && selectedSetup.ticker === symbol && selectedSetup.timeframe === timeframe ? selectedSetup : null}
                 toggles={toggles}
                 isDemo={isDemo}
                 lastComplete={candles?.last_bar_complete ?? true}
@@ -515,19 +553,23 @@ export default function Dashboard() {
         </div>
 
         <div className="max-h-[720px] lg:h-[620px] lg:max-h-none">
-          <SetupPanel analysis={analysis} loading={loading} blocked={loading ? null : blocked} />
+          {selectedSetup ? (
+            <StrategyDetail setup={selectedSetup} onClose={() => setSelectedSetupId(null)} />
+          ) : (
+            <SetupPanel analysis={analysis} loading={loading} blocked={loading ? null : blocked} />
+          )}
         </div>
       </main>
 
-      {/* Bottom panels */}
-      <section className="grid grid-cols-1 gap-3 px-3 pb-3 md:grid-cols-2 xl:grid-cols-[1fr_1fr_1.6fr_1.1fr_1.1fr]">
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none">
+      {/* Bottom panels: context row, then signals row */}
+      <section className="grid grid-cols-1 gap-3 px-3 pb-3 md:grid-cols-2 xl:grid-cols-12">
+        <div className="max-h-[420px] md:h-[340px] md:max-h-none xl:col-span-3">
           <BiasPanel analysis={analysis} />
         </div>
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none">
+        <div className="max-h-[420px] md:h-[340px] md:max-h-none xl:col-span-4">
           <LevelsPanel report={keyLevels} error={loading ? null : levelsError} />
         </div>
-        <div className="max-h-[520px] md:col-span-2 md:h-[420px] md:max-h-none xl:col-span-1 xl:h-[340px]">
+        <div className="max-h-[520px] md:col-span-2 md:h-[420px] md:max-h-none xl:col-span-5 xl:h-[340px]">
           <AIPanel
             analysis={analysis}
             result={ai}
@@ -536,10 +578,18 @@ export default function Dashboard() {
             onGenerate={generateAi}
           />
         </div>
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none">
+        <div className="max-h-[520px] md:col-span-2 md:h-[380px] md:max-h-none xl:col-span-6">
+          <StrategySetupsPanel
+            data={strategies}
+            error={strategiesError}
+            selectedId={selectedSetupId}
+            onSelect={selectStrategySetup}
+          />
+        </div>
+        <div className="max-h-[420px] md:h-[380px] md:max-h-none xl:col-span-3">
           <RecentSetups setups={setups} onSelect={selectSetup} />
         </div>
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none">
+        <div className="max-h-[420px] md:h-[380px] md:max-h-none xl:col-span-3">
           <AlertsPanel alerts={alerts} onAck={ack} notifyEnabled={notify} onToggleNotify={toggleNotify} />
         </div>
       </section>

@@ -43,6 +43,20 @@ CREATE TABLE IF NOT EXISTS last_status (
     status TEXT NOT NULL, setup_key TEXT NOT NULL,
     PRIMARY KEY (symbol, mode, timeframe)
 );
+CREATE TABLE IF NOT EXISTS strategy_signals (
+    id TEXT PRIMARY KEY,  -- hash of ticker|strategy|timeframe|direction|session|trigger time
+    ticker TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    session_date TEXT NOT NULL,
+    trigger_time INTEGER NOT NULL,
+    confirmed_at INTEGER NOT NULL,
+    entry REAL NOT NULL, stop REAL NOT NULL, target1 REAL, target2 REAL, risk_reward REAL,
+    payload TEXT NOT NULL,
+    is_demo INTEGER NOT NULL,
+    recorded_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -143,6 +157,53 @@ class Database:
         with self._lock, self._conn:
             cur = self._conn.execute("UPDATE alerts SET acknowledged=1 WHERE id=?", (alert_id,))
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------- strategy signals
+
+    def record_signal(self, signal_id: str, setup: dict, trigger: dict, is_demo: bool,
+                      strategy_name: str) -> dict | None:
+        """Append a TRIGGERED signal once (immutable log). Returns the new alert, if any."""
+        now = int(time.time())
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                """INSERT OR IGNORE INTO strategy_signals (id, ticker, strategy, timeframe,
+                   direction, session_date, trigger_time, confirmed_at, entry, stop, target1,
+                   target2, risk_reward, payload, is_demo, recorded_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (signal_id, setup["ticker"], setup["strategy"], setup["timeframe"],
+                 setup["direction"], setup["session_date"], trigger["time"],
+                 trigger["confirmed_at"], trigger["entry"], trigger["stop"], trigger["target1"],
+                 trigger["target2"], trigger["risk_reward"], json.dumps(setup), int(is_demo), now))
+            if cur.rowcount == 0:
+                return None
+            msg = (f"{setup['ticker']} {strategy_name} {setup['direction']} TRIGGERED on "
+                   f"{setup['timeframe']}: entry {trigger['entry']:.2f}, stop "
+                   f"{trigger['stop']:.2f}, T1 {trigger['target1']:.2f} "
+                   f"(R:R {trigger['risk_reward']:.2f}).")
+            cur = self._conn.execute(
+                """INSERT INTO alerts (symbol, mode, timeframe, status, direction, title, message,
+                   is_demo, created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                (setup["ticker"], "day", setup["timeframe"], "TRIGGERED",
+                 "long" if setup["direction"] == "LONG" else "short",
+                 f"{strategy_name} {setup['direction']}", msg, int(is_demo), now))
+            return self._alert_by_id(cur.lastrowid)
+
+    def signals(self, limit: int = 100, ticker: str | None = None) -> list[dict]:
+        sql = "SELECT * FROM strategy_signals"
+        args: tuple = ()
+        if ticker:
+            sql += " WHERE ticker=?"
+            args = (ticker,)
+        sql += " ORDER BY confirmed_at DESC, id LIMIT ?"
+        with self._lock:
+            rows = self._conn.execute(sql, (*args, limit)).fetchall()
+        out = []
+        for r in rows:
+            d = dict(r)
+            d["payload"] = json.loads(d["payload"])
+            d["is_demo"] = bool(d["is_demo"])
+            out.append(d)
+        return out
 
     # --------------------------------------------------------------------- AI cache
 

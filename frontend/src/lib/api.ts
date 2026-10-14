@@ -12,6 +12,7 @@ import type {
   Quote,
   RecordedSetup,
   SessionKind,
+  StrategyEvaluation,
 } from "./types";
 
 export const UNAVAILABLE = "MARKET DATA UNAVAILABLE";
@@ -85,6 +86,7 @@ export const api = {
     request<Analysis>(`/api/analysis/${symbol}?${q({ mode, timeframe })}`),
   levels: (symbol: string, mode: Mode, timeframe: string) =>
     request<KeyLevelReport>(`/api/levels/${symbol}?${q({ mode, timeframe })}`),
+  strategySetups: () => request<StrategyEvaluation>("/api/strategies/setups"),
   ai: (symbol: string, mode: Mode, timeframe: string, refresh = false) =>
     request<AIResult>(`/api/ai/${symbol}?${q({ mode, timeframe, refresh })}`, { method: "POST" }),
   scan: () => request<{ scanned_at: number; new_alerts: Alert[] }>("/api/scan", { method: "POST" }),

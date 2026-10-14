@@ -1,5 +1,6 @@
 export type Mode = "day" | "swing";
-export type SetupStatus = "ACTIONABLE" | "FORMING" | "NO_TRADE";
+export type SetupStatus = "ACTIONABLE" | "FORMING" | "NO_TRADE" | "TRIGGERED" | "WATCHING";
+export type StrategyStatus = "TRIGGERED" | "WATCHING" | "NO_TRADE";
 
 export type Latency = "real-time" | "delayed" | "historical" | "demo" | "unavailable";
 export type Freshness = "fresh" | "stale" | "unavailable" | "demo";
@@ -299,4 +300,65 @@ export interface KeyLevelReport {
   };
   is_demo: boolean;
   replay: boolean;
+}
+
+export interface StrategyCondition {
+  name: string;
+  passed: boolean | null;
+  required: boolean;
+  detail: string;
+  at: number | null;
+}
+
+export interface StrategyLevelRef {
+  label: string;
+  type: string;
+  low: number;
+  high: number;
+  timeframe: string;
+  strength: number | null;
+}
+
+/** One day-trading setup from the strategy engine (backend app/strategies). */
+export interface StrategySetup {
+  id: string;
+  ticker: string;
+  strategy: string;
+  strategy_name: string;
+  direction: "LONG" | "SHORT";
+  timeframe: string;
+  status: StrategyStatus;
+  htf_bias: { label: string; daily: string; hourly: string; detail: string };
+  evaluated_at: string;
+  session_date: string;
+  session_state: "open" | "closed";
+  entry: number | null;
+  stop: number | null;
+  target1: number | null;
+  target2: number | null;
+  risk_reward: number | null;
+  risk_per_share: number | null;
+  supporting_levels: StrategyLevelRef[];
+  confirmation: StrategyCondition[];
+  invalidation: string[];
+  evidence: { time: number; kind: string; price: number }[];
+  reasons: string[];
+  trigger_time: number | null;
+  trigger_time_et: string | null;
+  confirmed_at: number | null;
+  outcome: { state: string; time: number | null; bars_after_trigger: number | null } | null;
+  targets_basis: string[];
+  triggers_today: { time: number; entry: number; stop: number; risk_reward: number; accepted: boolean; blocked: string | null }[];
+  is_demo: boolean;
+}
+
+export interface StrategyEvaluation {
+  evaluated_at: string;
+  replay: boolean;
+  universe: string[];
+  timeframes: string[];
+  symbols: Record<string, { status: "ok" | "unavailable"; error?: string; gate_reasons?: string[]; triggered?: number; watching?: number }>;
+  is_demo: boolean;
+  setups: StrategySetup[];
+  strategies: { id: string; name: string }[];
 }

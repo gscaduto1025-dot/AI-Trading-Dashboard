@@ -40,7 +40,11 @@ def test_scan_records_setups_and_alerts_once(client):
     alerts = client.get("/api/alerts").json()["alerts"]
     non_trivial = [r for r in first["results"] if r["status"] != "NO_TRADE"]
     assert len(setups) == len(non_trivial)
-    assert len(alerts) == len(first["new_alerts"]) == len(non_trivial)
+    assert len(alerts) == len(first["new_alerts"])
+    # Setup-engine alerts (FORMING/ACTIONABLE) plus strategy-engine TRIGGERED signals.
+    assert len([a for a in alerts if a["status"] != "TRIGGERED"]) == len(non_trivial)
+    signals = client.get("/api/strategies/signals").json()["signals"]
+    assert len([a for a in alerts if a["status"] == "TRIGGERED"]) == len(signals)
     # Re-scanning unchanged (demo) data must not duplicate setups or alerts.
     second = client.post("/api/scan").json()
     assert second["new_alerts"] == []
