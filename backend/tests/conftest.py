@@ -1,14 +1,23 @@
-from datetime import date
+from datetime import datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings
-from app.data.demo import DemoDataProvider
+from app.data.demo import DemoSource
 from app.db import Database
 from app.main import Service, create_app
+from app.market.calendar import NY
+from app.market.service import MarketDataService
 
-FIXED_DAY = date(2026, 3, 10)  # a Tuesday
+# Demo data ends at the last completed session before this instant (Tue 2026-03-10 close).
+FIXED_NOW = datetime(2026, 3, 10, 18, 0, tzinfo=NY)
+WATCHLIST = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"]
+
+
+def demo_market() -> MarketDataService:
+    return MarketDataService(DemoSource(now=FIXED_NOW), symbols=WATCHLIST,
+                             now_fn=lambda: FIXED_NOW)
 
 
 @pytest.fixture
@@ -18,8 +27,7 @@ def settings(tmp_path):
 
 @pytest.fixture
 def service(settings):
-    return Service(settings, provider=DemoDataProvider(today=FIXED_DAY),
-                   db=Database(settings.database_path))
+    return Service(settings, market=demo_market(), db=Database(settings.database_path))
 
 
 @pytest.fixture

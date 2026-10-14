@@ -65,7 +65,7 @@ def build_prompt_payload(analysis: dict, recent_bars: list[dict], is_demo: bool)
     trimmed = {k: v for k, v in analysis.items() if k not in ("overlays",)}
     return {
         "data_source": "DEMO DATA (simulated, not real market prices)" if is_demo
-        else "Alpaca market data",
+        else "Alpaca market data; feed, coverage and latency are in analysis.data_status",
         "analysis": trimmed,
         "recent_bars": recent_bars,
     }

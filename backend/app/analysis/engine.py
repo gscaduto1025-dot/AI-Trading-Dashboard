@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass, field
 
 from ..data.base import TIMEFRAMES, Bar
 from . import indicators as ind
-from .levels import Level, compute_levels, find_pivots
+from .levels import SESSION_TOOLS_MAX_MINUTES, Level, compute_levels, find_pivots
 
 ACTIONABLE, FORMING, NO_TRADE = "ACTIONABLE", "FORMING", "NO_TRADE"
 _STATUS_RANK = {ACTIONABLE: 2, FORMING: 1, NO_TRADE: 0}
@@ -130,7 +130,7 @@ def market_bias(bars: list[Bar], mode: str, bar_minutes: int) -> dict:
         add(f"EMA{p['slow']} slope", v,
             f"{'Rising' if v > 0 else 'Falling' if v < 0 else 'Flat'} over 5 bars")
     add("RSI(14) momentum", 1 if rsi_val > 55 else -1 if rsi_val < 45 else 0, f"RSI {rsi_val:.1f}")
-    if mode == "day" and bar_minutes < 390:
+    if mode == "day" and bar_minutes <= SESSION_TOOLS_MAX_MINUTES:
         vw = ind.session_vwap(bars)[-1]
         if vw is not None:
             v = sign(price - vw, 0.1)
@@ -433,14 +433,14 @@ def build_context(bars: list[Bar], mode: str, bar_minutes: int, bias: dict,
     vols = [b.volume for b in bars]
     rsi_series = ind.rsi(closes)
     avg_vol = ind.last(ind.sma(vols[:-1], 20)) if len(vols) > 20 else None
-    intraday = bar_minutes < 390
+    session_tools = bar_minutes <= SESSION_TOOLS_MAX_MINUTES
     return Context(
         bars=bars, mode=mode, price=closes[-1],
         atr=ind.last(ind.atr(bars)) or (bars[-1].high - bars[-1].low) or closes[-1] * 0.01,
         rsi=ind.last(rsi_series) or 50.0,
         ema_fast=ind.last(ind.ema(closes, p["fast"])) or closes[-1],
         ema_slow=ind.last(ind.ema(closes, p["slow"])) or closes[-1],
-        vwap=ind.session_vwap(bars)[-1] if mode == "day" and intraday else None,
+        vwap=ind.session_vwap(bars)[-1] if mode == "day" and session_tools else None,
         long_ma=ind.last(ind.sma(closes, p["long"])) if p["long"] else None,
         vol_ratio=(vols[-1] / avg_vol) if avg_vol else 1.0,
         bias_score=bias["score"], levels=levels, rsi_series=rsi_series,

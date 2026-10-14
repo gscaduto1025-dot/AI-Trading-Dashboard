@@ -1,22 +1,46 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ApiError, api } from "@/lib/api";
-import { fmtDate, fmtPct, fmtPrice, fmtTime } from "@/lib/format";
-import type { AIResult, Alert, Analysis, Bar, Health, Mode, Quote, RecordedSetup } from "@/lib/types";
+import { ApiError, UNAVAILABLE, api } from "@/lib/api";
+import { fmtPct, fmtPrice } from "@/lib/format";
+import type {
+  AIResult,
+  Alert,
+  Analysis,
+  CandleResponse,
+  FeedInfo,
+  Health,
+  MarketStatus,
+  Mode,
+  Quote,
+  RecordedSetup,
+  SessionKind,
+} from "@/lib/types";
 import AIPanel from "./AIPanel";
 import AlertsPanel from "./AlertsPanel";
 import BiasPanel from "./BiasPanel";
 import LevelsPanel from "./LevelsPanel";
+import MarketStatusBar from "./MarketStatusBar";
 import PriceChart, { type ChartToggles } from "./PriceChart";
 import RecentSetups from "./RecentSetups";
 import SetupPanel from "./SetupPanel";
 import Watchlist from "./Watchlist";
-import { DemoTag, Panel } from "./ui";
+import { DataUnavailable, DemoTag, Panel } from "./ui";
 
-const FALLBACK_TIMEFRAMES: Record<Mode, string[]> = { day: ["1Min", "5Min", "15Min"], swing: ["1Hour", "1Day"] };
+const ALL_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
 const FALLBACK_DEFAULT: Record<Mode, string> = { day: "5Min", swing: "1Day" };
-const TF_LABEL: Record<string, string> = { "1Min": "1m", "5Min": "5m", "15Min": "15m", "1Hour": "1H", "1Day": "1D" };
+const DEFAULT_SYMBOLS = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"];
+const TF_LABEL: Record<string, string> = {
+  "1Min": "1m",
+  "5Min": "5m",
+  "15Min": "15m",
+  "30Min": "30m",
+  "1Hour": "1H",
+  "4Hour": "4H",
+  "1Day": "1D",
+  "1Week": "1W",
+};
+const INTRADAY = new Set(["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour"]);
 
 const errorText = (e: unknown) => (e instanceof ApiError || e instanceof Error ? e.message : String(e));
 
@@ -30,18 +54,29 @@ function usePolling(fn: () => void, ms: number, deps: unknown[]) {
   }, deps);
 }
 
+/** How often to refresh charts: fast while any session is live, slow when closed. */
+function refreshInterval(isDemo: boolean, phase: MarketStatus["phase"] | undefined, timeframe: string) {
+  if (isDemo) return 0; // demo data never changes
+  if (!phase || phase === "closed") return 120_000;
+  return timeframe === "1Min" ? 10_000 : 20_000;
+}
+
 export default function Dashboard() {
   const [health, setHealth] = useState<Health | null>(null);
   const [backendError, setBackendError] = useState<string | null>(null);
   const [symbol, setSymbol] = useState("SPY");
   const [mode, setMode] = useState<Mode>("day");
   const [timeframe, setTimeframe] = useState("5Min");
+  const [session, setSession] = useState<SessionKind>("regular");
   const [quotes, setQuotes] = useState<Quote[] | null>(null);
   const [quotesError, setQuotesError] = useState<string | null>(null);
-  const [bars, setBars] = useState<Bar[]>([]);
+  const [market, setMarket] = useState<MarketStatus | null>(null);
+  const [feed, setFeed] = useState<FeedInfo | null>(null);
+  const [candles, setCandles] = useState<CandleResponse | null>(null);
+  const [candlesError, setCandlesError] = useState<ApiError | null>(null);
   const [analysis, setAnalysis] = useState<Analysis | null>(null);
-  const [analysisError, setAnalysisError] = useState<string | null>(null);
-  // Key of the symbol/mode/timeframe whose data is currently shown; loading while it lags.
+  const [blocked, setBlocked] = useState<{ title: string; message: string } | null>(null);
+  // Key of the view whose data is currently shown; loading while it lags behind.
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   // AI results are tied to the symbol/mode/timeframe they were generated for.
   const [aiState, setAiState] = useState<{ key: string; result: AIResult } | null>(null);
@@ -62,13 +97,18 @@ export default function Dashboard() {
   const seenAlerts = useRef<number | null>(null);
   const requestId = useRef(0);
 
+  const intraday = INTRADAY.has(timeframe);
+  const effectiveSession: SessionKind = intraday ? session : "regular";
+  const viewKey = `${symbol}|${mode}|${timeframe}|${effectiveSession}`;
   const aiKey = `${symbol}|${mode}|${timeframe}`;
   const ai = aiState?.key === aiKey ? aiState.result : null;
-  const loading = loadedKey !== aiKey;
+  const loading = loadedKey !== viewKey;
   const isDemo = health?.is_demo ?? true;
-  const timeframes = health?.timeframes ?? FALLBACK_TIMEFRAMES;
-  // Demo data is static, so poll slowly; real data refreshes more often.
-  const refreshMs = isDemo ? 0 : 30_000;
+  const timeframes = health?.all_timeframes.map((t) => t.key) ?? ALL_TIMEFRAMES;
+  const suggested = new Set(health?.timeframes[mode] ?? []);
+  const phase = market?.phase;
+  const chartRefreshMs = refreshInterval(isDemo, phase, timeframe);
+  const quoteRefreshMs = isDemo ? 0 : phase === "closed" ? 60_000 : 10_000;
 
   usePolling(
     () => {
@@ -76,9 +116,14 @@ export default function Dashboard() {
         .health()
         .then((h) => {
           setHealth(h);
+          setFeed(h.feed);
           setBackendError(null);
         })
         .catch((e) => setBackendError(errorText(e)));
+      api
+        .marketStatus()
+        .then((r) => setMarket(r.market))
+        .catch(() => {});
     },
     30_000,
     [],
@@ -90,38 +135,57 @@ export default function Dashboard() {
         .watchlist()
         .then((r) => {
           setQuotes(r.quotes);
+          setMarket(r.market);
           setQuotesError(null);
         })
-        .catch((e) => setQuotesError(errorText(e)));
+        .catch((e) => {
+          // Never keep showing old prices as if they were current.
+          setQuotes(null);
+          setQuotesError(errorText(e));
+        });
     },
-    isDemo ? 0 : 15_000,
-    [isDemo, health !== null],
+    quoteRefreshMs,
+    [quoteRefreshMs, health !== null],
   );
 
   const loadChart = useCallback(() => {
     const id = ++requestId.current;
-    const key = `${symbol}|${mode}|${timeframe}`;
-    Promise.all([api.bars(symbol, timeframe), api.analysis(symbol, mode, timeframe)])
+    const key = viewKey;
+    Promise.allSettled([api.bars(symbol, timeframe, effectiveSession), api.analysis(symbol, mode, timeframe)])
       .then(([b, a]) => {
         if (id !== requestId.current) return; // a newer request superseded this one
-        setBars(b.bars);
-        setAnalysis(a);
-        setAnalysisError(null);
-      })
-      .catch((e) => {
-        if (id === requestId.current) setAnalysisError(errorText(e));
+        if (b.status === "fulfilled") {
+          setCandles(b.value);
+          setCandlesError(null);
+        } else {
+          setCandles(null);
+          setCandlesError(
+            b.reason instanceof ApiError ? b.reason : new ApiError(errorText(b.reason), 0, "ERROR", UNAVAILABLE),
+          );
+        }
+        if (a.status === "fulfilled") {
+          setAnalysis(a.value);
+          setBlocked(null);
+        } else {
+          const err = a.reason as ApiError;
+          setAnalysis(null);
+          setBlocked({
+            title: err.display ?? (err.code === "BACKEND_OFFLINE" ? "BACKEND OFFLINE" : UNAVAILABLE),
+            message: err.message,
+          });
+        }
       })
       .finally(() => {
         if (id === requestId.current) setLoadedKey(key);
       });
-  }, [symbol, mode, timeframe]);
+  }, [symbol, mode, timeframe, effectiveSession, viewKey]);
 
   useEffect(() => {
     loadChart();
-    if (refreshMs <= 0) return;
-    const t = setInterval(loadChart, refreshMs);
+    if (chartRefreshMs <= 0) return;
+    const t = setInterval(loadChart, chartRefreshMs);
     return () => clearInterval(t);
-  }, [loadChart, refreshMs, health !== null]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [loadChart, chartRefreshMs, health !== null]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadFeeds = useCallback(() => {
     api.recentSetups(30).then((r) => setSetups(r.setups)).catch(() => {});
@@ -199,6 +263,8 @@ export default function Dashboard() {
 
   const quote = quotes?.find((q) => q.symbol === symbol);
   const ind = analysis?.indicators;
+  const stale = candles?.status.freshness === "stale";
+  const dataDown = Boolean(quotesError) || Boolean(candlesError && candlesError.code !== "INVALID_REQUEST");
   const toggleList: [keyof ChartToggles, string, string, boolean][] = [
     ["emaFast", `EMA ${ind?.ema_fast_period ?? (mode === "day" ? 9 : 20)}`, "bg-[#4f9cf9]", true],
     ["emaSlow", `EMA ${ind?.ema_slow_period ?? (mode === "day" ? 21 : 50)}`, "bg-[#c084fc]", true],
@@ -236,12 +302,18 @@ export default function Dashboard() {
 
         <div className="flex items-baseline gap-3">
           <span className="text-lg font-bold">{symbol}</span>
-          <span className="num text-lg">{fmtPrice(quote?.price ?? analysis?.price)}</span>
-          {quote && (
-            <span className={`num text-sm ${quote.change_pct >= 0 ? "text-bull" : "text-bear"}`}>
-              {quote.change >= 0 ? "+" : ""}
-              {fmtPrice(quote.change)} ({fmtPct(quote.change_pct)})
-            </span>
+          {quote?.available ? (
+            <>
+              <span className="num text-lg">{fmtPrice(quote.price)}</span>
+              <span className={`num text-sm ${(quote.change ?? 0) >= 0 ? "text-bull" : "text-bear"}`}>
+                {(quote.change ?? 0) >= 0 ? "+" : ""}
+                {fmtPrice(quote.change)} ({fmtPct(quote.change_pct)})
+              </span>
+            </>
+          ) : quotesError || (quotes && !quote?.available) ? (
+            <span className="text-xs font-black uppercase tracking-[0.15em] text-bear">{UNAVAILABLE}</span>
+          ) : (
+            <span className="num text-lg text-faint">—</span>
           )}
           {isDemo && <DemoTag />}
         </div>
@@ -271,19 +343,29 @@ export default function Dashboard() {
           </button>
           <span
             className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold uppercase ring-1 ${
-              backendError
-                ? "text-bear ring-bear/40"
-                : isDemo
-                  ? "text-wait ring-wait/40"
-                  : "text-bull ring-bull/40"
+              backendError || dataDown ? "text-bear ring-bear/40" : isDemo ? "text-wait ring-wait/40" : "text-bull ring-bull/40"
             }`}
-            title={backendError ?? `Data source: ${health?.data_mode ?? "…"}`}
+            title={backendError ?? quotesError ?? feed?.coverage ?? ""}
           >
-            <span className={`h-1.5 w-1.5 rounded-full ${backendError ? "bg-bear" : isDemo ? "bg-wait" : "bg-bull"}`} />
-            {backendError ? "Backend offline" : isDemo ? "Demo feed" : "Alpaca"}
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${backendError || dataDown ? "bg-bear" : isDemo ? "bg-wait" : "bg-bull"}`}
+            />
+            {backendError
+              ? "Backend offline"
+              : isDemo
+                ? "Demo feed"
+                : `Alpaca ${feed?.label ?? ""}${dataDown ? " · unavailable" : ""}`}
           </span>
         </div>
       </header>
+
+      <MarketStatusBar
+        market={market}
+        feed={feed}
+        candles={candles}
+        candlesError={candlesError?.message ?? null}
+        quote={quote}
+      />
 
       {backendError && (
         <div className="border-b border-bear/30 bg-bear/10 px-4 py-2 text-xs text-bear">{backendError}</div>
@@ -292,80 +374,119 @@ export default function Dashboard() {
       {/* Main grid */}
       <main className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-[220px_minmax(0,1fr)_330px] xl:grid-cols-[240px_minmax(0,1fr)_360px]">
         <div className="lg:h-[620px]">
-          <Watchlist quotes={quotes} selected={symbol} onSelect={setSymbol} isDemo={isDemo} error={quotesError} />
+          <Watchlist
+            quotes={quotes}
+            selected={symbol}
+            onSelect={setSymbol}
+            isDemo={isDemo}
+            error={quotesError}
+            symbols={health?.watchlist ?? DEFAULT_SYMBOLS}
+          />
         </div>
 
         <div className="h-[480px] sm:h-[560px] lg:h-[620px]">
-        <Panel
-          title={
-            <span className="flex items-center gap-2 normal-case tracking-normal">
-              <span className="text-xs font-bold uppercase tracking-[0.12em] text-ink">{symbol}</span>
-              <span className="text-faint">
-                {analysis
-                  ? analysis.timeframe === "1Day"
-                    ? `as of ${fmtDate(analysis.as_of)} close`
-                    : `as of ${fmtTime(analysis.as_of)} ET`
-                  : ""}
+          <Panel
+            title={
+              <span className="flex items-center gap-2 normal-case tracking-normal">
+                <span className="text-xs font-bold uppercase tracking-[0.12em] text-ink">{symbol}</span>
+                <span className="text-faint">{TF_LABEL[timeframe]}</span>
+                {intraday && <span className="text-faint">· {effectiveSession === "regular" ? "RTH" : "ETH"}</span>}
               </span>
-            </span>
-          }
-          right={
-            <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line">
-              {timeframes[mode].map((tf) => (
-                <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  className={`num rounded px-2 py-0.5 text-[11px] font-semibold ${
-                    timeframe === tf ? "bg-white/10 text-ink" : "text-muted hover:text-ink"
-                  }`}
-                >
-                  {TF_LABEL[tf] ?? tf}
-                </button>
-              ))}
+            }
+            right={
+              <div className="flex items-center gap-1.5">
+                {intraday && (
+                  <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" title="Regular or extended trading hours">
+                    {(["regular", "extended"] as SessionKind[]).map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setSession(s)}
+                        className={`rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          session === s ? "bg-white/10 text-ink" : "text-muted hover:text-ink"
+                        }`}
+                      >
+                        {s === "regular" ? "RTH" : "ETH"}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="flex flex-wrap rounded-md bg-panel-2 p-0.5 ring-1 ring-line">
+                  {timeframes.map((tf) => (
+                    <button
+                      key={tf}
+                      onClick={() => setTimeframe(tf)}
+                      title={suggested.has(tf) ? `Suggested for ${mode} trading` : undefined}
+                      className={`num rounded px-1.5 py-0.5 text-[11px] font-semibold sm:px-2 ${
+                        timeframe === tf
+                          ? "bg-white/10 text-ink"
+                          : suggested.has(tf)
+                            ? "text-muted hover:text-ink"
+                            : "text-faint hover:text-ink"
+                      }`}
+                    >
+                      {TF_LABEL[tf] ?? tf}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            }
+            bodyClassName="flex flex-col"
+          >
+            <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
+              {toggleList
+                .filter(([, , , available]) => available)
+                .map(([key, label, swatch]) => (
+                  <button
+                    key={key}
+                    onClick={() => setToggles((t) => ({ ...t, [key]: !t[key] }))}
+                    className={`flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] ring-1 transition ${
+                      toggles[key] ? "text-ink ring-line-strong" : "text-faint ring-line opacity-60"
+                    }`}
+                  >
+                    <span className={`h-2 w-2 rounded-sm ${swatch}`} />
+                    {label}
+                  </button>
+                ))}
+              {ind && (
+                <span className="num ml-auto hidden text-[11px] text-faint md:inline">
+                  RSI {ind.rsi.toFixed(1)} · ATR {fmtPrice(ind.atr)}
+                  {ind.vwap !== null && ` · VWAP ${fmtPrice(ind.vwap)}`}
+                </span>
+              )}
             </div>
-          }
-          bodyClassName="flex flex-col"
-        >
-          <div className="flex flex-wrap items-center gap-1.5 border-b border-line px-3 py-1.5">
-            {toggleList
-              .filter(([, , , available]) => available)
-              .map(([key, label, swatch]) => (
-                <button
-                  key={key}
-                  onClick={() => setToggles((t) => ({ ...t, [key]: !t[key] }))}
-                  className={`flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] ring-1 transition ${
-                    toggles[key] ? "text-ink ring-line-strong" : "text-faint ring-line opacity-60"
-                  }`}
-                >
-                  <span className={`h-2 w-2 rounded-sm ${swatch}`} />
-                  {label}
-                </button>
-              ))}
-            {ind && (
-              <span className="num ml-auto hidden text-[11px] text-faint md:inline">
-                RSI {ind.rsi.toFixed(1)} · ATR {fmtPrice(ind.atr)}
-                {ind.vwap !== null && ` · VWAP ${fmtPrice(ind.vwap)}`}
-              </span>
-            )}
-          </div>
-          <div className="relative min-h-0 flex-1">
-            <PriceChart bars={bars} analysis={analysis} toggles={toggles} isDemo={isDemo} />
-            {loading && (
-              <div className="absolute inset-0 flex items-center justify-center bg-bg/40 text-xs text-muted">
-                Loading {symbol} {timeframe}…
-              </div>
-            )}
-            {analysisError && !loading && (
-              <div className="absolute inset-0 flex items-center justify-center p-6 text-center text-xs text-bear">
-                {analysisError}
-              </div>
-            )}
-          </div>
-        </Panel>
+            <div className="relative min-h-0 flex-1">
+              <PriceChart
+                bars={candles?.bars ?? []}
+                analysis={analysis}
+                toggles={toggles}
+                isDemo={isDemo}
+                lastComplete={candles?.last_bar_complete ?? true}
+                viewKey={viewKey}
+              />
+              {stale && !loading && (
+                <div className="absolute left-3 top-2 max-w-[80%] rounded bg-bear/15 px-2 py-1 text-[11px] text-bear ring-1 ring-bear/40">
+                  <span className="font-bold uppercase">Stale data</span> — {candles?.status.reason}
+                </div>
+              )}
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-bg/40 text-xs text-muted">
+                  Loading {symbol} {TF_LABEL[timeframe]}…
+                </div>
+              )}
+              {candlesError && !loading && (
+                <div className="absolute inset-0 flex items-center justify-center bg-bg/80">
+                  <DataUnavailable
+                    title={candlesError.code === "BACKEND_OFFLINE" ? "BACKEND OFFLINE" : UNAVAILABLE}
+                    message={candlesError.message}
+                  />
+                </div>
+              )}
+            </div>
+          </Panel>
         </div>
 
         <div className="max-h-[720px] lg:h-[620px] lg:max-h-none">
-          <SetupPanel analysis={analysis} loading={loading} />
+          <SetupPanel analysis={analysis} loading={loading} blocked={loading ? null : blocked} />
         </div>
       </main>
 
@@ -395,7 +516,9 @@ export default function Dashboard() {
       </section>
 
       <footer className="border-t border-line px-4 py-2.5 text-center text-[10px] text-faint">
-        {health?.disclaimer ?? "Educational analysis only — not financial advice."} Charts by{" "}
+        {health?.disclaimer ?? "Educational analysis only — not financial advice."}{" "}
+        {feed?.source === "alpaca" && <>Market data from Alpaca ({feed.label}). </>}
+        Charts by{" "}
         <a href="https://www.tradingview.com/" className="underline hover:text-muted" target="_blank" rel="noreferrer">
           TradingView Lightweight Charts
         </a>

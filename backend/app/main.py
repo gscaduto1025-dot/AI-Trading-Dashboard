@@ -4,23 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import csv
+import io
 import logging
-import threading
 import time
 from collections.abc import AsyncIterator
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 
 from .ai.claude import AIUnavailable, ClaudeAnalyst
 from .analysis.engine import analyze
 from .config import Settings, load_settings
-from .data.alpaca import AlpacaDataProvider
-from .data.base import (DEFAULT_TIMEFRAME, MODE_TIMEFRAMES, TIMEFRAMES, Bar, DataError,
-                        MarketDataProvider)
-from .data.demo import DemoDataProvider
+from .data.base import (DEFAULT_TIMEFRAME, MODE_TIMEFRAMES, TIMEFRAMES, DataError,
+                        InvalidRequest)
+from .data.demo import DemoSource
 from .db import Database
+from .market.alpaca_client import AlpacaClient, RateLimiter
+from .market.calendar import NY
+from .market.service import CandleSet, MarketDataService
+from .market.sources import AlpacaSource
+from .market.timeframes import SPECS
 
 log = logging.getLogger("tradescope")
 
@@ -29,43 +36,53 @@ DISCLAIMER = ("Educational analysis only — not financial advice. "
               "TradeScope AI does not place trades.")
 
 
-class Service:
-    """Holds the provider, database and caches shared by the routes."""
+def build_market(settings: Settings) -> MarketDataService:
+    """Alpaca when credentials are configured, otherwise clearly-labelled demo data."""
+    if settings.alpaca_enabled:
+        client = AlpacaClient(
+            settings.alpaca_key_id, settings.alpaca_secret_key,
+            data_url=settings.alpaca_data_url, trading_url=settings.alpaca_trading_url,
+            rate_limiter=RateLimiter(settings.alpaca_rate_limit_per_min),
+            max_retries=settings.alpaca_max_retries, timeout=settings.alpaca_timeout_seconds)
+        source = AlpacaSource(client, settings.alpaca_feed, settings.alpaca_adjustment)
+    else:
+        source = DemoSource()
+    return MarketDataService(source, symbols=settings.watchlist)
 
-    def __init__(self, settings: Settings, provider: MarketDataProvider | None = None,
+
+class Service:
+    """Holds the market data service, database and AI analyst shared by the routes."""
+
+    def __init__(self, settings: Settings, market: MarketDataService | None = None,
                  db: Database | None = None, analyst: ClaudeAnalyst | None = None) -> None:
         self.settings = settings
-        if provider is None:
-            provider = (AlpacaDataProvider(settings.alpaca_key_id, settings.alpaca_secret_key,
-                                           settings.alpaca_data_url, settings.alpaca_feed)
-                        if settings.alpaca_enabled else DemoDataProvider())
-        self.provider = provider
+        self.market = market or build_market(settings)
         self.db = db or Database(settings.database_path)
         self.analyst = analyst or ClaudeAnalyst(settings.claude_model, settings.claude_effort)
         self.ai_enabled = settings.anthropic_api_key_present or analyst is not None
-        self._bar_cache: dict[tuple[str, str], tuple[float, list[Bar]]] = {}
-        self._lock = threading.Lock()
         self.last_scan: int | None = None
 
     @property
     def is_demo(self) -> bool:
-        return self.provider.is_demo
+        return self.market.source.is_demo
 
-    def bars(self, symbol: str, timeframe: str) -> list[Bar]:
-        ttl = 3600.0 if self.is_demo else 20.0
-        key = (symbol, timeframe)
-        with self._lock:
-            hit = self._bar_cache.get(key)
-            if hit and time.time() - hit[0] < ttl:
-                return hit[1]
-        bars = self.provider.get_bars(symbol, timeframe, BAR_LIMIT)
-        with self._lock:
-            self._bar_cache[key] = (time.time(), bars)
-        return bars
+    def candles_for_analysis(self, symbol: str, timeframe: str) -> CandleSet:
+        """Regular-session candles that are safe to analyse, or raise AnalysisBlocked."""
+        candles = self.market.get_candles(symbol, timeframe, "regular", BAR_LIMIT)
+        block = candles.analysis_block()
+        if block:
+            raise AnalysisBlocked(*block, candles.status)
+        return candles
 
     def analysis(self, symbol: str, mode: str, timeframe: str) -> dict:
-        result = analyze(symbol, self.bars(symbol, timeframe), mode, timeframe)
+        candles = self.candles_for_analysis(symbol, timeframe)
+        # Strategies confirm on candle closes, so only completed candles are analysed.
+        bars = candles.completed_bars
+        result = analyze(candles.symbol, bars, mode, timeframe)
         result["is_demo"] = self.is_demo
+        result["data_status"] = candles.status
+        result["analyzed_through"] = bars[-1].time
+        result["excluded_forming_candle"] = len(bars) < len(candles.bars)
         return result
 
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
@@ -75,8 +92,13 @@ class Service:
             for symbol in self.settings.watchlist:
                 try:
                     a = self.analysis(symbol, mode, timeframe)
+                except AnalysisBlocked as exc:
+                    errors.append({"symbol": symbol, "mode": mode, "code": exc.code,
+                                   "error": exc.message})
+                    continue
                 except (DataError, ValueError) as exc:
-                    errors.append({"symbol": symbol, "mode": mode, "error": str(exc)})
+                    errors.append({"symbol": symbol, "mode": mode,
+                                   "code": getattr(exc, "code", "ERROR"), "error": str(exc)})
                     continue
                 alert = self.db.record_setup(a, self.is_demo)
                 if alert:
@@ -91,6 +113,25 @@ class Service:
                 "errors": errors, "is_demo": self.is_demo}
 
 
+class AnalysisBlocked(Exception):
+    def __init__(self, code: str, message: str, data_status: dict) -> None:
+        super().__init__(message)
+        self.code, self.message, self.data_status = code, message, data_status
+
+
+def _data_error(exc: DataError) -> HTTPException:
+    status = 400 if isinstance(exc, InvalidRequest) else 503
+    return HTTPException(status, {"code": exc.code, "message": str(exc),
+                                  "display": "MARKET DATA UNAVAILABLE"})
+
+
+def _blocked(exc: AnalysisBlocked) -> HTTPException:
+    display = "MARKET DATA UNAVAILABLE" if exc.code == "MARKET_DATA_UNAVAILABLE" else \
+        "ANALYSIS PAUSED"
+    return HTTPException(503, {"code": exc.code, "message": exc.message, "display": display,
+                               "data_status": exc.data_status})
+
+
 def _check_mode_timeframe(mode: str, timeframe: str | None) -> str:
     if mode not in MODE_TIMEFRAMES:
         raise HTTPException(400, f"mode must be one of {list(MODE_TIMEFRAMES)}")
@@ -98,6 +139,14 @@ def _check_mode_timeframe(mode: str, timeframe: str | None) -> str:
     if timeframe not in TIMEFRAMES:
         raise HTTPException(400, f"timeframe must be one of {list(TIMEFRAMES)}")
     return timeframe
+
+
+def _parse_dt(value: str) -> datetime:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(400, f"Invalid date/time {value!r}; use ISO 8601") from None
+    return dt if dt.tzinfo else dt.replace(tzinfo=NY)  # naive inputs are New York time
 
 
 def create_app(service: Service | None = None, run_scanner: bool = True) -> FastAPI:
@@ -123,7 +172,7 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                 log.exception("Background scan failed")
             await asyncio.sleep(svc.settings.scan_interval_seconds)
 
-    app = FastAPI(title="TradeScope AI", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="TradeScope AI", version="0.2.0", lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
 
@@ -135,11 +184,13 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
         s = svc()
         return {
             "status": "ok",
-            "data_mode": s.provider.name,
+            "data_mode": s.market.source.name,
             "is_demo": s.is_demo,
+            "feed": s.market.feed_info(),
             "ai_enabled": s.ai_enabled,
             "ai_model": s.settings.claude_model if s.ai_enabled else None,
             "watchlist": s.settings.watchlist,
+            "all_timeframes": [{"key": k, "label": v.label} for k, v in SPECS.items()],
             "timeframes": MODE_TIMEFRAMES,
             "default_timeframes": DEFAULT_TIMEFRAME,
             "last_scan": s.last_scan,
@@ -148,34 +199,70 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             "disclaimer": DISCLAIMER,
         }
 
+    @app.get("/api/market/status")
+    def market_status() -> dict:
+        s = svc()
+        return {"market": s.market.market_status(), "feed": s.market.feed_info(),
+                "is_demo": s.is_demo}
+
     @app.get("/api/watchlist")
     def watchlist() -> dict:
         s = svc()
         try:
-            quotes = s.provider.get_quotes(s.settings.watchlist)
+            quotes = s.market.get_quotes()
         except DataError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        return {"is_demo": s.is_demo, "quotes": [q.to_dict() for q in quotes]}
+            raise _data_error(exc) from exc
+        return {"is_demo": s.is_demo, "feed": s.market.feed_info(), "quotes": quotes,
+                "market": s.market.market_status()}
 
     @app.get("/api/bars/{symbol}")
-    def bars(symbol: str, timeframe: str = "5Min") -> dict:
+    def bars(symbol: str, timeframe: str = "5Min", session: str = "regular",
+             limit: int = Query(BAR_LIMIT, ge=1, le=5000)) -> dict:
         s = svc()
         if timeframe not in TIMEFRAMES:
             raise HTTPException(400, f"timeframe must be one of {list(TIMEFRAMES)}")
         try:
-            data = s.bars(symbol.upper(), timeframe)
+            candles = s.market.get_candles(symbol, timeframe, session, limit)
         except DataError as exc:
-            raise HTTPException(502, str(exc)) from exc
-        return {"symbol": symbol.upper(), "timeframe": timeframe, "is_demo": s.is_demo,
-                "bars": [b.to_dict() for b in data]}
+            raise _data_error(exc) from exc
+        return {"is_demo": s.is_demo, **candles.to_dict()}
+
+    @app.get("/api/history/{symbol}")
+    def history(symbol: str, timeframe: str, start: str, end: str | None = None,
+                session: str = "regular", format: str = "json"):
+        """Historical candles over an explicit range (paginated upstream) for backtesting."""
+        s = svc()
+        if timeframe not in TIMEFRAMES:
+            raise HTTPException(400, f"timeframe must be one of {list(TIMEFRAMES)}")
+        start_dt = _parse_dt(start)
+        end_dt = _parse_dt(end) if end else datetime.now(timezone.utc)
+        try:
+            candles = s.market.get_history(symbol, timeframe, start_dt, end_dt, session)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+        if format == "csv":
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(["time_utc", "time_ny", "open", "high", "low", "close", "volume",
+                        "complete"])
+            for b, done in zip(candles.bars, candles.complete):
+                w.writerow([datetime.fromtimestamp(b.time, timezone.utc).isoformat(),
+                            datetime.fromtimestamp(b.time, NY).isoformat(),
+                            b.open, b.high, b.low, b.close, b.volume, done])
+            name = f"{candles.symbol}_{timeframe}_{candles.status['feed']}.csv"
+            return Response(buf.getvalue(), media_type="text/csv",
+                            headers={"Content-Disposition": f'attachment; filename="{name}"'})
+        return {"is_demo": s.is_demo, **candles.to_dict()}
 
     @app.get("/api/analysis/{symbol}")
     def analysis(symbol: str, mode: str = "day", timeframe: str | None = None) -> dict:
         tf = _check_mode_timeframe(mode, timeframe)
         try:
-            return svc().analysis(symbol.upper(), mode, tf)
+            return svc().analysis(symbol, mode, tf)
+        except AnalysisBlocked as exc:
+            raise _blocked(exc) from exc
         except DataError as exc:
-            raise HTTPException(502, str(exc)) from exc
+            raise _data_error(exc) from exc
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
 
@@ -189,13 +276,17 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                     "reason": "Claude AI is not configured. Set ANTHROPIC_API_KEY in "
                               "backend/.env and restart the backend."}
         try:
-            a = s.analysis(symbol.upper(), mode, tf)
+            a = s.analysis(symbol, mode, tf)
+            recent = [b.to_dict() for b in
+                      s.market.get_candles(symbol, tf, "regular", BAR_LIMIT).completed_bars[-30:]]
+        except AnalysisBlocked as exc:
+            return {"available": False, "reason": f"Analysis paused: {exc.message}"}
         except (DataError, ValueError) as exc:
-            raise HTTPException(502, str(exc)) from exc
-        cache_key = f"{a['symbol']}|{mode}|{tf}|{a['as_of']}|{s.analyst.model}|{s.is_demo}"
+            return {"available": False, "reason": f"MARKET DATA UNAVAILABLE: {exc}"}
+        feed = s.market.feed.id
+        cache_key = f"{a['symbol']}|{mode}|{tf}|{a['analyzed_through']}|{s.analyst.model}|{feed}"
         if not refresh and (cached := s.db.get_ai(cache_key)):
             return {"available": True, "cached": True, "as_of": a["as_of"], **cached}
-        recent = [b.to_dict() for b in s.bars(a["symbol"], tf)[-30:]]
         try:
             result = s.analyst.explain(a, recent, s.is_demo)
         except AIUnavailable as exc:

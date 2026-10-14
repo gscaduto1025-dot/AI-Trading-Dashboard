@@ -1,9 +1,29 @@
-import type { AIResult, Alert, Analysis, Bar, Health, Mode, Quote, RecordedSetup } from "./types";
+import type {
+  AIResult,
+  Alert,
+  Analysis,
+  CandleResponse,
+  DataStatus,
+  FeedInfo,
+  Health,
+  MarketStatus,
+  Mode,
+  Quote,
+  RecordedSetup,
+  SessionKind,
+} from "./types";
+
+export const UNAVAILABLE = "MARKET DATA UNAVAILABLE";
 
 export class ApiError extends Error {
   constructor(
     message: string,
     public status: number,
+    /** Stable code from the backend, e.g. MARKET_DATA_UNAVAILABLE, STALE_DATA. */
+    public code: string = "ERROR",
+    /** Headline to show the user, e.g. "MARKET DATA UNAVAILABLE". */
+    public display: string | null = null,
+    public dataStatus: DataStatus | null = null,
   ) {
     super(message);
   }
@@ -14,20 +34,34 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     res = await fetch(path, { cache: "no-store", ...init });
   } catch {
-    throw new ApiError("Cannot reach the TradeScope backend. Is it running on port 8000?", 0);
+    throw new ApiError("Cannot reach the TradeScope backend. Is it running on port 8000?", 0, "BACKEND_OFFLINE");
   }
   if (!res.ok) {
-    let detail = res.statusText;
+    let message = res.statusText;
+    let code = "ERROR";
+    let display: string | null = null;
+    let dataStatus: DataStatus | null = null;
     try {
       const body = await res.json();
-      detail = typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail ?? body);
+      const d = body.detail ?? body;
+      if (typeof d === "string") {
+        message = d;
+      } else if (d && typeof d === "object" && "message" in d) {
+        message = d.message;
+        code = d.code ?? code;
+        display = d.display ?? null;
+        dataStatus = d.data_status ?? null;
+      } else {
+        message = JSON.stringify(d);
+      }
     } catch {
-      /* non-JSON error body */
+      // Non-JSON body: most likely the Next.js proxy could not reach the backend.
+      if (res.status >= 500) {
+        message = "Backend unavailable. Start it with ./scripts/dev.sh or see README.";
+        code = "BACKEND_OFFLINE";
+      }
     }
-    if (res.status >= 500 && res.status !== 502) {
-      detail = "Backend unavailable. Start it with ./scripts/dev.sh or see README.";
-    }
-    throw new ApiError(detail, res.status);
+    throw new ApiError(message, res.status, code, display, dataStatus);
   }
   return res.json() as Promise<T>;
 }
@@ -41,16 +75,17 @@ const q = (params: Record<string, string | number | boolean | undefined>) =>
 
 export const api = {
   health: () => request<Health>("/api/health"),
-  watchlist: () => request<{ is_demo: boolean; quotes: Quote[] }>("/api/watchlist"),
-  bars: (symbol: string, timeframe: string) =>
-    request<{ bars: Bar[]; is_demo: boolean }>(`/api/bars/${symbol}?${q({ timeframe })}`),
+  marketStatus: () => request<{ market: MarketStatus; feed: FeedInfo; is_demo: boolean }>("/api/market/status"),
+  watchlist: () =>
+    request<{ is_demo: boolean; quotes: Quote[]; feed: FeedInfo; market: MarketStatus }>("/api/watchlist"),
+  bars: (symbol: string, timeframe: string, session: SessionKind) =>
+    request<CandleResponse>(`/api/bars/${symbol}?${q({ timeframe, session })}`),
   analysis: (symbol: string, mode: Mode, timeframe: string) =>
     request<Analysis>(`/api/analysis/${symbol}?${q({ mode, timeframe })}`),
   ai: (symbol: string, mode: Mode, timeframe: string, refresh = false) =>
     request<AIResult>(`/api/ai/${symbol}?${q({ mode, timeframe, refresh })}`, { method: "POST" }),
   scan: () => request<{ scanned_at: number; new_alerts: Alert[] }>("/api/scan", { method: "POST" }),
-  recentSetups: (limit = 25) =>
-    request<{ setups: RecordedSetup[] }>(`/api/setups/recent?${q({ limit })}`),
+  recentSetups: (limit = 25) => request<{ setups: RecordedSetup[] }>(`/api/setups/recent?${q({ limit })}`),
   alerts: (limit = 50) => request<{ alerts: Alert[] }>(`/api/alerts?${q({ limit })}`),
   ackAlert: (id: number) => request<{ ok: boolean }>(`/api/alerts/${id}/ack`, { method: "POST" }),
 };

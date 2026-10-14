@@ -31,10 +31,16 @@ def _load_dotenv(path: Path) -> None:
 
 @dataclass(frozen=True)
 class Settings:
-    alpaca_key_id: str = ""
-    alpaca_secret_key: str = ""
+    # Secrets are excluded from repr() so they can't leak into logs or tracebacks.
+    alpaca_key_id: str = field(default="", repr=False)
+    alpaca_secret_key: str = field(default="", repr=False)
     alpaca_data_url: str = "https://data.alpaca.markets"
+    alpaca_trading_url: str = "https://paper-api.alpaca.markets"  # only /v2/calendar is used
     alpaca_feed: str = "iex"
+    alpaca_adjustment: str = "split"
+    alpaca_rate_limit_per_min: int = 190
+    alpaca_max_retries: int = 3
+    alpaca_timeout_seconds: float = 15.0
     anthropic_api_key_present: bool = False
     claude_model: str = "claude-opus-5-5"
     claude_effort: str = "medium"
@@ -60,11 +66,17 @@ def load_settings() -> Settings:
         if s.strip()
     ]
     db_path = os.environ.get("DATABASE_PATH")
+    env = os.environ.get
     return Settings(
-        alpaca_key_id=os.environ.get("ALPACA_API_KEY_ID", ""),
-        alpaca_secret_key=os.environ.get("ALPACA_API_SECRET_KEY", ""),
-        alpaca_data_url=os.environ.get("ALPACA_DATA_URL", "https://data.alpaca.markets"),
-        alpaca_feed=os.environ.get("ALPACA_FEED", "iex"),
+        alpaca_key_id=(env("ALPACA_API_KEY_ID") or env("APCA_API_KEY_ID") or "").strip(),
+        alpaca_secret_key=(env("ALPACA_API_SECRET_KEY") or env("APCA_API_SECRET_KEY") or "").strip(),
+        alpaca_data_url=env("ALPACA_DATA_URL", "https://data.alpaca.markets"),
+        alpaca_trading_url=env("ALPACA_TRADING_URL", "https://paper-api.alpaca.markets"),
+        alpaca_feed=env("ALPACA_FEED", "iex").strip().lower(),
+        alpaca_adjustment=env("ALPACA_ADJUSTMENT", "split").strip().lower(),
+        alpaca_rate_limit_per_min=int(env("ALPACA_RATE_LIMIT_PER_MIN", "190")),
+        alpaca_max_retries=int(env("ALPACA_MAX_RETRIES", "3")),
+        alpaca_timeout_seconds=float(env("ALPACA_TIMEOUT_SECONDS", "15")),
         anthropic_api_key_present=bool(
             os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")
         ),

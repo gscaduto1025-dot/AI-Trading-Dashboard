@@ -18,6 +18,10 @@ from ..data.base import Bar
 
 NY = ZoneInfo("America/New_York")
 
+# Session-anchored tools (prior-day levels, opening range, session VWAP) only make sense when
+# a session contains several candles; above this bar length the swing references are used.
+SESSION_TOOLS_MAX_MINUTES = 60
+
 
 @dataclass
 class Level:
@@ -82,7 +86,7 @@ def _session_groups(bars: list[Bar]) -> list[list[Bar]]:
 
 def reference_levels(bars: list[Bar], mode: str, bar_minutes: int) -> list[Level]:
     refs: list[Level] = []
-    if mode == "day" and bar_minutes < 390:
+    if mode == "day" and bar_minutes <= SESSION_TOOLS_MAX_MINUTES:
         sessions = _session_groups(bars)
         if len(sessions) >= 2:
             prev = sessions[-2]
@@ -92,7 +96,7 @@ def reference_levels(bars: list[Bar], mode: str, bar_minutes: int) -> list[Level
         today = sessions[-1]
         refs.append(Level(today[0].open, "", "Session open", strength=0.5))
         or_bars = today[:max(1, 30 // bar_minutes)]
-        if len(today) > len(or_bars):
+        if bar_minutes <= 30 and len(today) > len(or_bars):
             refs.append(Level(max(b.high for b in or_bars), "", "Opening range high", strength=0.7))
             refs.append(Level(min(b.low for b in or_bars), "", "Opening range low", strength=0.7))
     else:
@@ -102,10 +106,11 @@ def reference_levels(bars: list[Bar], mode: str, bar_minutes: int) -> list[Level
         refs.append(Level(min(b.low for b in window), "", "20-bar low", strength=0.7))
         if len(bars) >= 120:
             long_window = bars[-251:-1]
-            refs.append(Level(max(b.high for b in long_window), "", "52-week high"
-                              if bar_minutes >= 390 else "Long-range high", strength=0.9))
-            refs.append(Level(min(b.low for b in long_window), "", "52-week low"
-                              if bar_minutes >= 390 else "Long-range low", strength=0.9))
+            daily = bar_minutes == 390  # 250 daily candles ~ one year
+            refs.append(Level(max(b.high for b in long_window), "",
+                              "52-week high" if daily else "Long-range high", strength=0.9))
+            refs.append(Level(min(b.low for b in long_window), "",
+                              "52-week low" if daily else "Long-range low", strength=0.9))
     return refs
 
 

@@ -5,8 +5,7 @@ import pytest
 from app.analysis.engine import ACTIONABLE, FORMING, NO_TRADE, analyze, market_bias
 from app.analysis.levels import compute_levels, find_pivots
 from app.data.base import Bar
-from app.data.demo import DemoDataProvider
-from tests.conftest import FIXED_DAY
+from tests.conftest import demo_market
 
 DAY0 = 1767450600  # 2026-01-05 09:30 ET (Monday)
 
@@ -70,11 +69,12 @@ def test_choppy_market_is_no_trade():
 
 
 def test_statuses_are_valid_across_demo_universe():
-    p = DemoDataProvider(today=FIXED_DAY)
+    m = demo_market()
     seen = set()
     for sym in ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"]:
-        for mode, tf in [("day", "5Min"), ("day", "1Min"), ("swing", "1Day"), ("swing", "1Hour")]:
-            r = analyze(sym, p.get_bars(sym, tf, 300), mode, tf)
+        for mode, tf in [("day", "5Min"), ("day", "1Min"), ("day", "30Min"), ("swing", "1Day"),
+                         ("swing", "1Hour"), ("swing", "4Hour"), ("swing", "1Week")]:
+            r = analyze(sym, m.get_candles(sym, tf, limit=300).completed_bars, mode, tf)
             s = r["setup"]
             seen.add(s["status"])
             assert s["status"] in (ACTIONABLE, FORMING, NO_TRADE)

@@ -2,7 +2,7 @@
 
 import { STATUS_LABEL, directionColor, fmtPrice, statusClasses } from "@/lib/format";
 import type { Analysis } from "@/lib/types";
-import { Empty, Panel, Skeleton } from "./ui";
+import { DataUnavailable, Empty, Panel, Skeleton } from "./ui";
 
 function Row({ label, value, className = "" }: { label: string; value: string; className?: string }) {
   return (
@@ -13,7 +13,26 @@ function Row({ label, value, className = "" }: { label: string; value: string; c
   );
 }
 
-export default function SetupPanel({ analysis, loading }: { analysis: Analysis | null; loading: boolean }) {
+export default function SetupPanel({
+  analysis,
+  loading,
+  blocked,
+}: {
+  analysis: Analysis | null;
+  loading: boolean;
+  /** Why analysis was refused (stale/unavailable/integrity), if it was. */
+  blocked: { title: string; message: string } | null;
+}) {
+  if (blocked) {
+    return (
+      <Panel title="Trade Setup">
+        <DataUnavailable title={blocked.title} message={blocked.message} />
+        <p className="px-4 text-center text-[11px] text-faint">
+          No setup is shown because the engine only analyses fresh, validated, completed candles.
+        </p>
+      </Panel>
+    );
+  }
   if (!analysis) {
     return (
       <Panel title="Trade Setup">
@@ -117,6 +136,18 @@ export default function SetupPanel({ analysis, loading }: { analysis: Analysis |
             </ul>
           </>
         )}
+
+        <p className="text-[10px] leading-relaxed text-faint">
+          Analysed {analysis.data_status.source === "demo" ? "demo" : analysis.data_status.feed_label} candles through{" "}
+          {new Date(analysis.analyzed_through * 1000).toLocaleString("en-US", {
+            timeZone: "America/New_York",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          })}{" "}
+          ET{analysis.excluded_forming_candle ? " · forming candle excluded (close confirmation)" : ""}.
+        </p>
 
         {s.checklist.length > 0 && (
           <div>

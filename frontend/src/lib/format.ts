@@ -57,3 +57,32 @@ export function statusClasses(status: SetupStatus, direction: "long" | "short" |
 
 export const directionColor = (d: "long" | "short" | null) =>
   d === "long" ? "text-bull" : d === "short" ? "text-bear" : "text-muted";
+
+/** Compact volume, e.g. 1.2M. */
+export function fmtVolume(v: number | null | undefined) {
+  if (v === null || v === undefined) return "—";
+  if (v >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+  if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+  if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+  return v.toFixed(0);
+}
+
+/** ISO timestamp -> "Mar 10, 11:02 AM ET". */
+export function fmtIsoNy(iso: string | null | undefined, withDate = true) {
+  if (!iso) return "—";
+  return `${new Date(iso).toLocaleString("en-US", {
+    timeZone: "America/New_York",
+    month: withDate ? "short" : undefined,
+    day: withDate ? "numeric" : undefined,
+    hour: "numeric",
+    minute: "2-digit",
+  })} ET`;
+}
+
+export const LATENCY_LABEL: Record<string, string> = {
+  "real-time": "Real-time",
+  delayed: "Delayed 15 min",
+  historical: "Historical",
+  demo: "Demo data",
+  unavailable: "Unavailable",
+};

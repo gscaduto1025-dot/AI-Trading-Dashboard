@@ -46,11 +46,17 @@ export default function PriceChart({
   analysis,
   toggles,
   isDemo,
+  lastComplete,
+  viewKey,
 }: {
   bars: Bar[];
   analysis: Analysis | null;
   toggles: ChartToggles;
   isDemo: boolean;
+  /** False when the newest candle is still forming; it is drawn translucent. */
+  lastComplete: boolean;
+  /** Changes when symbol/timeframe/session change; the view is re-fitted only then. */
+  viewKey: string;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -134,7 +140,14 @@ export default function PriceChart({
     const volume = volumeRef.current;
     if (!candles || !volume) return;
     candles.setData(
-      bars.map((b) => ({ time: ts(b.time), open: b.open, high: b.high, low: b.low, close: b.close })),
+      bars.map((b, i) => {
+        const point = { time: ts(b.time), open: b.open, high: b.high, low: b.low, close: b.close };
+        if (i === bars.length - 1 && !lastComplete) {
+          const c = b.close >= b.open ? "rgba(34,197,94,0.45)" : "rgba(239,68,68,0.45)";
+          return { ...point, color: c, borderColor: c, wickColor: c };
+        }
+        return point;
+      }),
     );
     volume.setData(
       toggles.volume
@@ -145,13 +158,16 @@ export default function PriceChart({
           }))
         : [],
     );
-  }, [bars, toggles.volume]);
+  }, [bars, toggles.volume, lastComplete]);
 
-  // Fit the view when the symbol/timeframe changes (bars identity of first bar changes).
-  const firstTime = bars[0]?.time;
+  // Fit the view when the symbol/timeframe/session changes, not on every live refresh.
+  const fittedKey = useRef<string | null>(null);
   useEffect(() => {
-    chartRef.current?.timeScale().fitContent();
-  }, [firstTime]);
+    if (bars.length && fittedKey.current !== viewKey) {
+      chartRef.current?.timeScale().fitContent();
+      fittedKey.current = viewKey;
+    }
+  }, [bars, viewKey]);
 
   // Indicator overlays.
   useEffect(() => {

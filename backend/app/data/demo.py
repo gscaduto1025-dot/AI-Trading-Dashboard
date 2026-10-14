@@ -1,14 +1,13 @@
-"""Deterministic synthetic market data for running the dashboard without an API key.
+"""Deterministic simulated market data for running the dashboard without Alpaca keys.
 
-Everything produced here is DEMO DATA. Prices are a seeded random walk with trending and
-choppy regimes so that the analysis engine has something realistic-looking to work on.
-They do not reflect real market prices and do not change in real time: the same symbol and
-calendar day always generate the same bars.
+Everything produced here is DEMO DATA: a seeded random walk with trending and choppy regimes.
+It does not reflect real prices and never updates in real time. Data covers regular sessions
+up to the last completed trading day, follows the NYSE calendar (holidays, early closes),
+and is shaped like Alpaca responses so it flows through the same validation pipeline.
 
-Consistency across timeframes: a daily open/close path is generated first, then each
-session's one-minute path is a Brownian bridge from that day's open to its close. Intraday
-timeframes aggregate the minute path, and daily highs/lows come from it, so the watchlist,
-the daily chart and the intraday charts all agree with each other.
+Consistency across timeframes: a daily open/close path is generated first, then each session's
+one-minute path is a Brownian bridge from that day's open to its close. Other timeframes
+aggregate the minute path, so the watchlist, daily and intraday charts agree.
 """
 
 from __future__ import annotations
@@ -16,15 +15,14 @@ from __future__ import annotations
 import math
 import random
 import zlib
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, timedelta, timezone
 from functools import lru_cache
-from zoneinfo import ZoneInfo
 
-from .base import TIMEFRAMES, Bar, Quote, validate_timeframe
+from ..market.calendar import NY, MarketCalendar, SessionDay
+from ..market.sources import DEMO_FEED
+from .base import TIMEFRAMES, Bar
 
-NY = ZoneInfo("America/New_York")
-SESSION_MINUTES = 390
-DAILY_HISTORY = 420  # weekdays of history generated per symbol
+DAILY_HISTORY = 420  # trading days of history per symbol
 
 # (illustrative starting price, daily volatility, typical daily volume) -- not real quotes.
 _PROFILES: dict[str, tuple[float, float, float]] = {
@@ -45,57 +43,47 @@ def _seed(*parts: object) -> int:
     return zlib.crc32("|".join(str(p) for p in parts).encode())
 
 
-def _last_weekday(d: date) -> date:
-    while d.weekday() >= 5:
-        d -= timedelta(days=1)
-    return d
+def _midnight(d: date) -> int:
+    return int(datetime.combine(d, datetime.min.time(), NY).timestamp())
 
 
-def _weekdays_back(end: date, count: int) -> list[date]:
-    days: list[date] = []
-    d = _last_weekday(end)
-    while len(days) < count:
-        if d.weekday() < 5:
-            days.append(d)
-        d -= timedelta(days=1)
-    return list(reversed(days))
+def _iso(ts: int) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @lru_cache(maxsize=64)
-def _daily_path(symbol: str, anchor: date) -> tuple[tuple[date, float, float, float], ...]:
-    """(day, open, close, volume) for DAILY_HISTORY weekdays ending at `anchor`."""
+def _daily_path(symbol: str, days: tuple[SessionDay, ...]
+                ) -> tuple[tuple[SessionDay, float, float, float], ...]:
+    """(session, open, close, volume) per trading day."""
     start_price, daily_vol, daily_volume = _PROFILES.get(symbol, _DEFAULT_PROFILE)
-    # Seeded on the window start, so the series is fixed for a given calendar day.
-    days = _weekdays_back(anchor, DAILY_HISTORY)
-    rng = random.Random(_seed(symbol, "daily", days[0].isoformat()))
+    rng = random.Random(_seed(symbol, "daily", days[0].day.isoformat()))
     price = start_price * (1 + rng.uniform(-0.1, 0.1))
     drift, regime_left = 0.0, 0
     out = []
-    for d in days:
+    for sd in days:
         if regime_left <= 0:
             trending = rng.random() < 0.6
             drift = rng.choice([-1, 1]) * daily_vol * rng.uniform(0.05, 0.18) if trending else 0.0
             regime_left = rng.randint(8, 30)
         regime_left -= 1
         open_ = price * (1 + rng.gauss(0, daily_vol * 0.3))
-        # Gentle mean reversion keeps the illustrative price near its profile level.
-        pull = -0.02 * math.log(open_ / start_price)
+        pull = -0.02 * math.log(open_ / start_price)  # keeps the walk near its profile level
         ret = drift + pull + rng.gauss(0, daily_vol)
         close = open_ * (1 + ret)
         volume = daily_volume * (1 + abs(ret) / daily_vol * 0.4) * rng.uniform(0.7, 1.3)
-        out.append((d, open_, close, volume))
+        out.append((sd, open_, close, volume))
         price = close
     return tuple(out)
 
 
 @lru_cache(maxsize=4096)
-def _session_minutes(symbol: str, day: date, open_: float, close: float,
+def _session_minutes(symbol: str, sd: SessionDay, open_: float, close: float,
                      volume: float) -> tuple[Bar, ...]:
     """One-minute bars for a session: a Brownian bridge from `open_` to `close`."""
     _, daily_vol, _ = _PROFILES.get(symbol, _DEFAULT_PROFILE)
-    rng = random.Random(_seed(symbol, "minute", day.isoformat()))
-    n = SESSION_MINUTES
-    sigma = daily_vol / math.sqrt(n)
+    rng = random.Random(_seed(symbol, "minute", sd.day.isoformat()))
+    n = int((sd.close - sd.open).total_seconds() // 60)
+    sigma = daily_vol / math.sqrt(390)
     walk = [0.0]
     drift, regime_left = 0.0, 0
     for _ in range(n):
@@ -105,72 +93,84 @@ def _session_minutes(symbol: str, day: date, open_: float, close: float,
         regime_left -= 1
         walk.append(walk[-1] + drift + rng.gauss(0, sigma))
     log_move = math.log(close / open_)
-    path = [
-        open_ * math.exp(log_move * i / n + walk[i] - walk[n] * i / n) for i in range(n + 1)
-    ]
-    open_dt = datetime.combine(day, time(9, 30), NY)
+    path = [open_ * math.exp(log_move * i / n + walk[i] - walk[n] * i / n) for i in range(n + 1)]
+    start = int(sd.open.timestamp())
     bars = []
     for i in range(n):
         o, c = path[i], path[i + 1]
         hi = max(o, c) * (1 + abs(rng.gauss(0, sigma * 0.35)))
         lo = min(o, c) * (1 - abs(rng.gauss(0, sigma * 0.35)))
-        pos = i / (n - 1)
+        pos = i / max(n - 1, 1)
         shape = 0.55 + 4.0 * (pos - 0.5) ** 2  # U-shaped intraday volume
         v = volume / n * shape * rng.uniform(0.5, 1.5) / 0.88
-        ts = int((open_dt + timedelta(minutes=i)).timestamp())
-        bars.append(Bar(ts, o, hi, lo, c, v))
+        bars.append(Bar(start + i * 60, o, hi, lo, c, v))
     return tuple(bars)
 
 
-def _aggregate(minutes: tuple[Bar, ...], size: int) -> list[Bar]:
-    out = []
-    for i in range(0, len(minutes), size):
-        chunk = minutes[i:i + size]
-        out.append(Bar(
-            chunk[0].time,
-            round(chunk[0].open, 2),
-            round(max(b.high for b in chunk), 2),
-            round(min(b.low for b in chunk), 2),
-            round(chunk[-1].close, 2),
-            float(int(sum(b.volume for b in chunk))),
-        ))
-    return out
+def _combine(chunk, time: int) -> Bar:
+    return Bar(time, round(chunk[0].open, 2), round(max(b.high for b in chunk), 2),
+               round(min(b.low for b in chunk), 2), round(chunk[-1].close, 2),
+               float(int(sum(b.volume for b in chunk))))
 
 
-class DemoDataProvider:
+class DemoSource:
     name = "demo"
     is_demo = True
+    feed = DEMO_FEED
+    adjustment = "n/a"
 
-    def __init__(self, today: date | None = None) -> None:
-        self._today = today
+    def __init__(self, calendar: MarketCalendar | None = None,
+                 now: datetime | None = None) -> None:
+        self.calendar = calendar or MarketCalendar()
+        self._now = now
 
-    def _anchor(self) -> date:
-        return _last_weekday(self._today or datetime.now(NY).date())
+    def _days(self) -> tuple[SessionDay, ...]:
+        now = self._now or datetime.now(timezone.utc)
+        last = self.calendar.last_completed_session(now)
+        return tuple(self.calendar.trading_days_back(last.day, DAILY_HISTORY))
 
-    def get_bars(self, symbol: str, timeframe: str, limit: int = 300) -> list[Bar]:
-        validate_timeframe(timeframe)
+    def _daily_bars(self, symbol: str, path) -> list[Bar]:
+        return [_combine(_session_minutes(symbol, sd, o, c, v), _midnight(sd.day))
+                for sd, o, c, v in path]
+
+    def fetch_bars(self, symbol: str, timeframe: str, start: datetime, end: datetime,
+                   max_items: int = 50_000) -> list[Bar]:
         symbol = symbol.upper()
-        days = _daily_path(symbol, self._anchor())
+        lo, hi = start.timestamp(), end.timestamp()
+        path = [p for p in _daily_path(symbol, self._days())
+                if p[0].close.timestamp() > lo and _midnight(p[0].day) < hi]
         if timeframe == "1Day":
-            bars = []
-            for d, o, c, v in days[-limit:]:
-                session = _aggregate(_session_minutes(symbol, d, o, c, v), SESSION_MINUTES)[0]
-                bars.append(session)
-            return bars
+            return self._daily_bars(symbol, path)[:max_items]
+        if timeframe == "1Week":
+            weeks: dict[date, list[Bar]] = {}
+            for b in self._daily_bars(symbol, path):
+                d = datetime.fromtimestamp(b.time, NY).date()
+                weeks.setdefault(d - timedelta(days=d.weekday()), []).append(b)
+            return [_combine(chunk, _midnight(monday)) for monday, chunk in weeks.items()][:max_items]
 
         size = TIMEFRAMES[timeframe]
-        per_session = math.ceil(SESSION_MINUTES / size)
-        needed = min(math.ceil(limit / per_session), len(days))
-        bars = []
-        for d, o, c, v in days[-needed:]:
-            bars.extend(_aggregate(_session_minutes(symbol, d, o, c, v), size))
-        return bars[-limit:]
+        out: list[Bar] = []
+        for sd, o, c, v in path:
+            minutes = _session_minutes(symbol, sd, o, c, v)
+            for i in range(0, len(minutes), size):
+                bar = _combine(minutes[i:i + size], minutes[i].time)
+                if lo <= bar.time < hi:
+                    out.append(bar)
+        return out[:max_items]
 
-    def get_quotes(self, symbols: list[str]) -> list[Quote]:
-        quotes = []
+    def fetch_snapshots(self, symbols: list[str]) -> dict[str, dict]:
+        """Alpaca-shaped snapshots built from the last two simulated sessions."""
+        out = {}
+        days = self._days()
         for sym in symbols:
-            prev, last = self.get_bars(sym, "1Day", limit=2)
-            change = last.close - prev.close
-            quotes.append(Quote(sym.upper(), last.close, prev.close, round(change, 2),
-                                round(change / prev.close * 100, 2), last.time))
-        return quotes
+            sym = sym.upper()
+            path = _daily_path(sym, days)[-2:]
+            prev, last = self._daily_bars(sym, path)
+            bar = lambda b: {"t": _iso(b.time), "o": b.open, "h": b.high, "l": b.low,  # noqa: E731
+                             "c": b.close, "v": b.volume}
+            out[sym] = {
+                "latestTrade": {"p": last.close, "t": _iso(int(path[-1][0].close.timestamp()) - 1)},
+                "dailyBar": bar(last),
+                "prevDailyBar": bar(prev),
+            }
+        return out

@@ -1,10 +1,80 @@
 export type Mode = "day" | "swing";
 export type SetupStatus = "ACTIONABLE" | "FORMING" | "NO_TRADE";
 
+export type Latency = "real-time" | "delayed" | "historical" | "demo" | "unavailable";
+export type Freshness = "fresh" | "stale" | "unavailable" | "demo";
+export type SessionKind = "regular" | "extended";
+
+export interface FeedInfo {
+  id: "iex" | "sip" | "delayed_sip" | "demo";
+  label: string;
+  latency: Latency;
+  coverage: string;
+  delay_seconds: number;
+  source: "alpaca" | "demo";
+  adjustment: string | null;
+}
+
+/** Provenance and quality label attached to every candle response. */
+export interface DataStatus {
+  source: "alpaca" | "demo";
+  feed: string;
+  feed_label: string;
+  coverage: string;
+  latency: Latency;
+  freshness: Freshness;
+  reason: string | null;
+  as_of: string;
+  data_cutoff: string;
+  latest_bar_time: string | null;
+  latest_bar_complete: boolean;
+}
+
+export interface MarketStatus {
+  phase: "pre-market" | "regular" | "after-hours" | "closed";
+  label: string;
+  is_open: boolean;
+  is_extended_hours: boolean;
+  trading_day: boolean;
+  holiday: string | null;
+  early_close: string | null;
+  today: { date: string; open: string; close: string; session_open: string; session_close: string; early_close: boolean } | null;
+  next_open: string;
+  next_close: string;
+  now: string;
+  timezone: string;
+  calendar_source: "alpaca" | "nyse-rules";
+  calendar_error: string | null;
+  data_cutoff: string;
+}
+
+export interface Quality {
+  ok: boolean;
+  checked: number;
+  dropped: number;
+  errors: string[];
+  warnings: string[];
+  info: string[];
+}
+
+export interface CandleResponse {
+  symbol: string;
+  timeframe: string;
+  session: SessionKind;
+  is_demo: boolean;
+  bars: Bar[];
+  last_bar_complete: boolean;
+  completed_count: number;
+  status: DataStatus;
+  quality: Quality;
+}
+
 export interface Health {
   status: string;
   data_mode: "demo" | "alpaca";
   is_demo: boolean;
+  feed: FeedInfo;
+  all_timeframes: { key: string; label: string }[];
   ai_enabled: boolean;
   ai_model: string | null;
   watchlist: string[];
@@ -18,11 +88,17 @@ export interface Health {
 
 export interface Quote {
   symbol: string;
-  price: number;
-  prev_close: number;
-  change: number;
-  change_pct: number;
-  as_of: number;
+  available: boolean;
+  price: number | null;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  volume: number | null;
+  price_time: string | null;
+  session_date: string;
+  stale: boolean;
+  reason: string | null;
+  latency: Latency;
 }
 
 export interface Bar {
@@ -110,6 +186,9 @@ export interface Analysis {
   setup: TradeSetup;
   alternatives: TradeSetup[];
   overlays: Record<string, LinePoint[]>;
+  data_status: DataStatus;
+  analyzed_through: number;
+  excluded_forming_candle: boolean;
 }
 
 export interface AIResult {

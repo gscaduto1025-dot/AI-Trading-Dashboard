@@ -46,3 +46,27 @@ export function Empty({ children }: { children: ReactNode }) {
 export function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-white/5 ${className}`} />;
 }
+
+/** Shown wherever real data was expected but could not be obtained. Never a fallback price. */
+export function DataUnavailable({
+  title = "MARKET DATA UNAVAILABLE",
+  message,
+  compact = false,
+}: {
+  title?: string;
+  message?: string | null;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`flex flex-col items-center justify-center text-center ${compact ? "gap-1 p-3" : "gap-2 p-6"}`}>
+      <span
+        className={`rounded-md px-3 py-1 font-black uppercase tracking-[0.18em] text-bear ring-1 ring-bear/50 ${
+          compact ? "text-[10px]" : "text-sm"
+        }`}
+      >
+        {title}
+      </span>
+      {message && <p className="max-w-md text-[11px] leading-relaxed text-muted">{message}</p>}
+    </div>
+  );
+}
