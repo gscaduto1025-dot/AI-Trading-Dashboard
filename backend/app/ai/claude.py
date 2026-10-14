@@ -1,8 +1,9 @@
-"""Claude-generated explanations of the engine's analysis.
+"""Claude explanations of verified technical analysis.
 
-Claude does not detect setups or choose prices. It receives the deterministic engine output
-(levels, bias, setup, checklist, recent bars) and explains it in plain language. Its verdict
-may be more cautious than the engine's, never more aggressive.
+Claude does not detect setups, choose prices or decide statuses. It receives the
+deterministic fact sheet (app/ai/facts.py) for one symbol and setup and returns a
+structured explanation (app/ai/validate.py OUTPUT_SCHEMA). The response is validated
+against the fact sheet before anyone sees it.
 """
 
 from __future__ import annotations
@@ -12,75 +13,56 @@ import logging
 
 import anthropic
 
+from .validate import OUTPUT_SCHEMA
+
 log = logging.getLogger(__name__)
 
 # Models that accept the server-side `fallbacks: "default"` option on the Claude API.
 _FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
 
-SYSTEM_PROMPT = """You are the analysis explainer inside TradeScope AI, a stock and options \
-trading analysis dashboard for day and swing traders. A deterministic rules engine has already \
-computed indicators, support/resistance, market bias and a candidate trade setup. Your job is \
-to explain that analysis clearly to a trader who will make their own decision.
+SYSTEM_PROMPT = """You are the market-analysis explainer inside TradeScope AI, an analysis \
+dashboard for day and swing traders. Deterministic engines have already measured the market: \
+bias, moving averages, VWAP, volume, support/resistance zones and a rules-based trade plan. \
+You receive their output as a fact sheet and explain it to a trader who makes their own \
+decisions.
 
-Rules:
-- Use only the numbers provided. Never invent prices, levels, news, earnings dates or other \
-facts that are not in the input.
-- Your verdict may be more cautious than the engine's status, never more aggressive. If the \
-engine says NO_TRADE, your verdict is NO_TRADE. If it says FORMING or WATCHING, your verdict is \
-WAIT or NO_TRADE. Only an ACTIONABLE or TRIGGERED status can receive TAKE_SETUP, and only if \
-you agree.
-- Saying there is no trade is a good outcome when conditions are unclear; say so plainly.
-- Be specific: reference the actual entry, stop, targets, levels and checklist items.
-- Point out what would invalidate the idea and what would need to change for a better setup.
-- analysis.key_levels lists automatically detected levels with evidence. Their strength
-scores are heuristic rankings of supporting evidence, not probabilities of a reversal; never
-describe them as odds or likelihoods.
-- analysis.strategy_setups lists the trade-planning engine's plans for this symbol in the \
-selected mode (day or swing trading), each with entry trigger, entry, stop, targets and the \
-basis for every number. analysis.plan_status is the best plan status and caps your verdict: \
-NO_TRADE -> NO_TRADE; WATCHING -> WAIT or NO_TRADE; TRIGGERED -> any verdict. Reference plans \
-by strategy name, never change their numbers, never upgrade WATCHING to triggered, and never \
-invent a setup that is not listed.
-- If the input says the data is DEMO DATA, state in the summary that the analysis is based on \
-simulated demo data and is not a real market read.
-- This is educational analysis, not financial advice. Do not tell the user to buy or sell; \
-describe the conditions instead. Keep each bullet to one or two sentences."""
+Numbers:
+- Every price, level, percentage, ratio or other number you write must be copied exactly as \
+it appears in the fact sheet. Do not compute, round differently, estimate or extrapolate new \
+numbers, and never mention a price or level that is not in the sheet. Unverifiable sentences \
+are removed automatically, so a number you invent is wasted space.
+- Refer to levels by their label and price as given (for example "Daily resistance zone \
+517.43-525.88").
 
-OUTPUT_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "headline": {"type": "string", "description": "One-line takeaway, max ~15 words"},
-        "verdict": {"type": "string", "enum": ["TAKE_SETUP", "WAIT", "NO_TRADE"]},
-        "summary": {"type": "string", "description": "2-4 sentence plain-language summary"},
-        "bullish_case": {"type": "array", "items": {"type": "string"}},
-        "bearish_case": {"type": "array", "items": {"type": "string"}},
-        "key_levels_commentary": {"type": "string"},
-        "what_to_watch": {"type": "array", "items": {"type": "string"}},
-        "risk_notes": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": ["headline", "verdict", "summary", "bullish_case", "bearish_case",
-                 "key_levels_commentary", "what_to_watch", "risk_notes"],
-    "additionalProperties": False,
-}
+Authority:
+- setup_status, symbol, trading_mode, market_bias, setup_name and data_timestamp must be \
+copied from the sheet (setup.status, symbol, trading_mode, market_bias.label, \
+"<setup.name> (<direction>, <timeframe>)" or "No setup", data_timestamp). You cannot change a \
+status, an entry, a stop or a target. If the status is NO_TRADE, explain why from \
+setup.status_reasons and failed_checks; never suggest taking the trade anyway.
 
-_VERDICT_CAP = {"NO_TRADE": {"NO_TRADE"}, "FORMING": {"WAIT", "NO_TRADE"},
-                "WATCHING": {"WAIT", "NO_TRADE"},
-                "ACTIONABLE": {"TAKE_SETUP", "WAIT", "NO_TRADE"},
-                "TRIGGERED": {"TAKE_SETUP", "WAIT", "NO_TRADE"}}
+Content (concise, specific, useful):
+- technical_summary: current price structure - market bias factors, higher-timeframe trend, \
+moving-average alignment, VWAP relationship (day trading), volume.
+- key_level_explanations: the 2-4 levels that matter most right now (nearest support and \
+resistance, plus setup levels) and why each matters, using its evidence.
+- setup_explanation: the technical evidence for the setup (or why there is none).
+- bullish_scenario / bearish_scenario: what price action at which listed levels would support \
+each outcome. Describe conditions, not forecasts.
+- entry_conditions: the confirmation still required, from setup.confirmation and the entry \
+trigger; for a TRIGGERED setup, what confirmed it.
+- invalidation_conditions: from setup.invalidation and the stop.
+- risk_explanation: major risks, uncertainty and conflicting evidence (conflicting_signals, \
+failed checks, opposing bias factors, thin volume, demo data).
+
+Never promise or imply guaranteed outcomes, certainty or profitability; this is educational \
+analysis, not financial advice, and you do not tell anyone to buy or sell. If the data source \
+is DEMO DATA, say in technical_summary that it is simulated data. One to three sentences per \
+text field; one sentence per list item."""
 
 
 class AIUnavailable(Exception):
-    """Claude could not produce an analysis (no key, API error, refusal...)."""
-
-
-def build_prompt_payload(analysis: dict, recent_bars: list[dict], is_demo: bool) -> dict:
-    trimmed = {k: v for k, v in analysis.items() if k not in ("overlays",)}
-    return {
-        "data_source": "DEMO DATA (simulated, not real market prices)" if is_demo
-        else "Alpaca market data; feed, coverage and latency are in analysis.data_status",
-        "analysis": trimmed,
-        "recent_bars": recent_bars,
-    }
+    """Claude could not produce an explanation (no key, API error, refusal, bad output)."""
 
 
 class ClaudeAnalyst:
@@ -96,14 +78,13 @@ class ClaudeAnalyst:
             self._client = anthropic.Anthropic()
         return self._client
 
-    def explain(self, analysis: dict, recent_bars: list[dict], is_demo: bool) -> dict:
-        payload = build_prompt_payload(analysis, recent_bars, is_demo)
+    def explain_setup(self, facts: dict) -> tuple[dict, str]:
+        """Ask Claude for the structured explanation. Returns (parsed JSON, model).
+        The caller validates it against `facts`."""
         user_text = (
-            f"Explain this {analysis['mode']}-trading analysis of {analysis['symbol']} on the "
-            f"{analysis['timeframe']} timeframe. Trade-plan status: "
-            f"{analysis.get('plan_status') or analysis['setup']['status']}.\n\n"
-            f"<analysis_json>\n{json.dumps(payload, separators=(',', ':'))}\n</analysis_json>"
-        )
+            "Explain this setup using only the fact sheet below.\n\n"
+            f"<fact_sheet>\n{json.dumps(facts, separators=(',', ':'), sort_keys=True)}\n"
+            "</fact_sheet>")
         kwargs: dict = dict(
             model=self.model,
             max_tokens=16000,
@@ -139,17 +120,8 @@ class ClaudeAnalyst:
             raise AIUnavailable("Claude's response was cut off; try again.")
         text = "".join(b.text for b in response.content if b.type == "text")
         try:
-            result = json.loads(text)
+            data = json.loads(text)
         except json.JSONDecodeError as exc:
             log.warning("Unparseable Claude output (request %s)", response._request_id)
-            raise AIUnavailable("Claude returned an unexpected format.") from exc
-
-        # Enforce the "never more aggressive than the engine" rule.
-        # The trade-planning engine is authoritative; the legacy setup status is the
-        # fallback only when no plan status was supplied.
-        status = analysis.get("plan_status") or analysis["setup"]["status"]
-        allowed = _VERDICT_CAP.get(status, {"NO_TRADE"})
-        if result.get("verdict") not in allowed:
-            result["verdict"] = "WAIT" if "WAIT" in allowed else "NO_TRADE"
-        result["model"] = response.model
-        return result
+            raise AIUnavailable("Claude returned output that is not valid JSON.") from exc
+        return data, response.model

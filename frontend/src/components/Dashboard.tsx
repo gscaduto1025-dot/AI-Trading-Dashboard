@@ -4,7 +4,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError, UNAVAILABLE, api } from "@/lib/api";
 import { fmtPct, fmtPrice } from "@/lib/format";
 import type {
-  AIResult,
   Alert,
   Analysis,
   CandleResponse,
@@ -108,8 +107,6 @@ export default function Dashboard() {
   // Key of the view whose data is currently shown; loading while it lags behind.
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   // AI results are tied to the symbol/mode/timeframe they were generated for.
-  const [aiState, setAiState] = useState<{ key: string; result: AIResult } | null>(null);
-  const [aiLoading, setAiLoading] = useState(false);
   const [setups, setSetups] = useState<RecordedSetup[] | null>(null);
   const [strategies, setStrategies] = useState<StrategyEvaluation | null>(null);
   const [strategiesError, setStrategiesError] = useState<string | null>(null);
@@ -142,8 +139,6 @@ export default function Dashboard() {
   const intraday = INTRADAY.has(timeframe);
   const effectiveSession: SessionKind = intraday ? session : "regular";
   const viewKey = `${symbol}|${mode}|${timeframe}|${effectiveSession}`;
-  const aiKey = `${symbol}|${mode}|${timeframe}`;
-  const ai = aiState?.key === aiKey ? aiState.result : null;
   const loading = loadedKey !== viewKey;
   const isDemo = health?.is_demo ?? true;
   const timeframes = health?.all_timeframes.map((t) => t.key) ?? ALL_TIMEFRAMES;
@@ -361,18 +356,6 @@ export default function Dashboard() {
       setBackendError(errorText(e));
     } finally {
       setScanning(false);
-    }
-  };
-
-  const generateAi = async (refresh: boolean) => {
-    setAiLoading(true);
-    const key = aiKey;
-    try {
-      setAiState({ key, result: await api.ai(symbol, mode, timeframe, refresh) });
-    } catch (e) {
-      setAiState({ key, result: { available: false, reason: errorText(e) } });
-    } finally {
-      setAiLoading(false);
     }
   };
 
@@ -645,19 +628,20 @@ export default function Dashboard() {
 
       {/* Bottom panels: context row, then signals row */}
       <section className="grid grid-cols-1 gap-3 px-3 pb-3 md:grid-cols-2 xl:grid-cols-12">
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none xl:col-span-3">
+        <div className="max-h-[420px] md:h-[440px] md:max-h-none xl:col-span-3">
           <BiasPanel analysis={analysis} />
         </div>
-        <div className="max-h-[420px] md:h-[340px] md:max-h-none xl:col-span-4">
+        <div className="max-h-[420px] md:h-[440px] md:max-h-none xl:col-span-4">
           <LevelsPanel report={keyLevels} error={loading ? null : levelsError} />
         </div>
-        <div className="max-h-[520px] md:col-span-2 md:h-[420px] md:max-h-none xl:col-span-5 xl:h-[340px]">
+        <div className="max-h-[520px] md:col-span-2 md:h-[420px] md:max-h-none xl:col-span-5 xl:h-[440px]">
           <AIPanel
-            analysis={analysis}
-            result={ai}
-            loading={aiLoading}
+            symbol={symbol}
+            mode={mode}
+            setupId={(selectedSetup ?? selectedSwing)?.id ?? null}
+            dataKey={currentPlans?.data?.evaluated_at ?? ""}
             aiEnabled={health?.ai_enabled ?? false}
-            onGenerate={generateAi}
+            isDemo={isDemo}
           />
         </div>
         <div className="max-h-[520px] md:col-span-2 md:h-[380px] md:max-h-none xl:col-span-6">

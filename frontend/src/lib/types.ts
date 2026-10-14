@@ -192,21 +192,67 @@ export interface Analysis {
   excluded_forming_candle: boolean;
 }
 
-export interface AIResult {
+/** Deterministic fact sheet the AI explanation is checked against (backend app/ai/facts.py). */
+export interface AIFacts {
+  symbol: string;
+  trading_mode: Mode;
+  chart_timeframe: string;
+  data_timestamp: string;
+  last_completed_candle: string | null;
+  data_source: string;
+  last_price: number;
+  market_bias: { label: "bullish" | "bearish" | "neutral"; score: number; max_score: number };
+  vwap: { value: number; relation: string; distance_pct: number } | null;
+  moving_averages: Record<string, number | string>;
+  volume: { relative_volume: number | null; coverage: string | null };
+  nearest_support: { label: string; price: number | null; zone_low: number | null; zone_high: number | null } | null;
+  nearest_resistance: { label: string; price: number | null; zone_low: number | null; zone_high: number | null } | null;
+  setup: {
+    name: string;
+    direction: "LONG" | "SHORT";
+    timeframe: string;
+    status: StrategyStatus;
+    status_reasons: string[];
+  } | null;
+}
+
+export interface AIExplanation {
+  symbol: string;
+  trading_mode: Mode;
+  market_bias: "bullish" | "bearish" | "neutral";
+  setup_name: string;
+  setup_status: StrategyStatus;
+  technical_summary: string;
+  key_level_explanations: { level: string; explanation: string }[];
+  setup_explanation: string;
+  bullish_scenario: string;
+  bearish_scenario: string;
+  entry_conditions: string[];
+  invalidation_conditions: string[];
+  risk_explanation: string;
+  data_timestamp: string;
+}
+
+export interface AIValidation {
+  passed: boolean;
+  corrections: string[];
+  removed: { field: string; text: string; reason: string }[];
+  numbers_checked: number;
+  numbers_verified: number;
+}
+
+export interface AIResponse {
   available: boolean;
   reason?: string;
   cached?: boolean;
-  as_of?: number;
-  headline?: string;
-  verdict?: "TAKE_SETUP" | "WAIT" | "NO_TRADE";
-  summary?: string;
-  bullish_case?: string[];
-  bearish_case?: string[];
-  key_levels_commentary?: string;
-  what_to_watch?: string[];
-  risk_notes?: string[];
+  not_generated?: boolean;
+  status: StrategyStatus;
+  setup_id?: string | null;
+  facts: AIFacts | null;
+  explanation?: AIExplanation;
+  validation?: AIValidation;
   model?: string;
-  engine_status?: SetupStatus;
+  generated_at?: string;
   is_demo?: boolean;
 }
 

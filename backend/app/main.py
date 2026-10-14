@@ -7,6 +7,7 @@ import contextlib
 import csv
 import io
 import logging
+import threading
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 
 from .ai.claude import AIUnavailable, ClaudeAnalyst
+from .ai.facts import build_facts, cache_key as ai_cache_key, engine_status
+from .ai.validate import ExplanationInvalid, validate_explanation
 from .analysis.engine import analyze
 from .analysis.levels import Level as EngineLevel
 from .config import Settings, load_settings
@@ -75,6 +78,7 @@ class Service:
         self._strategy_cache: dict[tuple, list[dict]] = {}
         self.swing_config: SwingConfig = load_swing_config()
         self.planning_config: PlanningConfig = load_planning_config()
+        self._ai_locks: dict[str, threading.Lock] = {}
         self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
@@ -387,27 +391,76 @@ class Service:
                 "reason": reason, "evaluated_at": res["evaluated_at"],
                 "min_rr": self.planning_config.min_rr_for(mode), "is_demo": self.is_demo}
 
-    def strategy_summary(self, symbol: str, mode: str) -> tuple[list[dict], str]:
-        """Compact trade plans for one symbol (context for the AI explanation) and the best
-        plan status, which caps the AI verdict."""
+    def setup_with_plan(self, symbol: str, mode: str, setup_id: str | None
+                        ) -> tuple[dict | None, dict | None]:
+        """The selected setup (by id) or the symbol's best plan in this mode."""
+        symbol = self.market.check_symbol(symbol)
+        if mode == "swing":
+            rows = self.swing_setups([symbol], record=False)["setups"]
+        elif symbol in self.day_universe:
+            rows = self.strategy_setups([symbol], record=False)["setups"]
+        else:
+            return None, None
+        rows = [r for r in rows if r["ticker"] == symbol and r.get("plan")]
+        if setup_id:
+            hit = next((r for r in rows if r["id"] == setup_id), None)
+            if hit is None:
+                raise InvalidRequest(f"setup {setup_id} is not a current {mode} setup for "
+                                     f"{symbol}")
+            return hit, hit["plan"]
+        order = {"TRIGGERED": 0, "WATCHING": 1, "NO_TRADE": 2}
+        rows.sort(key=lambda r: (order[r["status"]], r["plan"]["entry_trigger"] is None,
+                                 -r["plan"]["quality"]["score"]))
+        return (rows[0], rows[0]["plan"]) if rows else (None, None)
+
+    def ai_explanation(self, symbol: str, mode: str, setup_id: str | None = None,
+                       refresh: bool = False, generate: bool = True) -> dict:
+        """Claude's explanation of one setup, validated against the verified fact sheet.
+
+        The deterministic facts are always returned, so the technical analysis survives any
+        AI failure. Explanations are cached in SQLite by a hash of the facts, model and
+        effort: the same candles and plan never cost a second API call. With
+        generate=False only the cache is consulted (no API call)."""
+        if mode not in ("day", "swing"):
+            raise InvalidRequest("mode must be day or swing")
+        setup, plan = self.setup_with_plan(symbol, mode, setup_id)
+        tf = plan["timeframe"] if plan else DEFAULT_TIMEFRAME[mode]
         try:
-            res = self.plans_for(symbol, mode)
-        except DataError:
-            return [], "NO_TRADE"
-        keys = ("strategy_name", "direction", "timeframe", "status", "risk_per_share",
-                "reward_per_share_t1", "risk_reward_t1", "risk_reward_t2", "reasons")
-        out = []
-        for p in res["plans"]:
-            if p["status"] == "NO_TRADE" and len(out) >= 3:
-                continue
-            row = {k: p.get(k) for k in keys}
-            for k in ("entry_trigger", "entry", "stop", "target1", "target2"):
-                row[k] = {"price": p[k]["price"], "basis": p[k]["basis"]} if p.get(k) else None
-            row["quality_score"] = p["quality"]["score"] if p.get("quality") else None
-            out.append(row)
-            if len(out) >= 6:
-                break
-        return out, res["status"]
+            analysis = self.analysis(symbol, mode, tf)
+        except AnalysisBlocked as exc:
+            return {"available": False, "facts": None, "status": "NO_TRADE",
+                    "reason": f"Analysis paused: {exc.message}"}
+        facts = build_facts(analysis, setup, plan, mode, self.is_demo)
+        base = {"facts": facts, "status": engine_status(facts),
+                "setup_id": setup["id"] if setup else None, "is_demo": self.is_demo}
+        if not self.ai_enabled:
+            return {**base, "available": False,
+                    "reason": "AI explanation unavailable: Claude is not configured. Set "
+                              "ANTHROPIC_API_KEY in backend/.env and restart the backend."}
+        key = ai_cache_key(facts, self.analyst.model, self.analyst.effort)
+        if not refresh and (cached := self.db.get_ai(key)):
+            return {**base, "available": True, "cached": True, **cached}
+        if not generate:
+            return {**base, "available": False, "cached": False, "not_generated": True,
+                    "reason": "Not generated yet for the current data."}
+        with self._ai_locks.setdefault(key, threading.Lock()):
+            if not refresh and (cached := self.db.get_ai(key)):  # filled while we waited
+                return {**base, "available": True, "cached": True, **cached}
+            try:
+                raw, model = self.analyst.explain_setup(facts)
+                checked = validate_explanation(raw, facts)
+            except AIUnavailable as exc:
+                return {**base, "available": False,
+                        "reason": f"AI explanation unavailable: {exc}"}
+            except ExplanationInvalid as exc:
+                log.warning("Claude explanation rejected for %s %s: %s", symbol, mode, exc)
+                return {**base, "available": False,
+                        "reason": f"AI explanation unavailable: the response failed "
+                                  f"validation ({exc})"}
+            result = {**checked, "model": model,
+                      "generated_at": datetime.now(NY).isoformat(timespec="seconds")}
+            self.db.put_ai(key, result)
+        return {**base, "available": True, "cached": False, **result}
 
     def scan(self, modes: tuple[str, ...] = ("day", "swing")) -> dict:
         results, alerts, errors = [], [], []
@@ -617,39 +670,22 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             raise HTTPException(503, {"code": "INSUFFICIENT_DATA", "message": str(exc),
                                       "display": "ANALYSIS PAUSED"}) from exc
 
+    @app.get("/api/ai/{symbol}")
+    def ai_cached(symbol: str, mode: str = "day", setup_id: str | None = None) -> dict:
+        """Cached explanation for the current data, if any (never calls Claude)."""
+        try:
+            return svc().ai_explanation(symbol, mode, setup_id, generate=False)
+        except DataError as exc:
+            raise _data_error(exc) from exc
+
     @app.post("/api/ai/{symbol}")
-    def ai_analysis(symbol: str, mode: str = "day", timeframe: str | None = None,
+    def ai_generate(symbol: str, mode: str = "day", setup_id: str | None = None,
                     refresh: bool = False) -> dict:
-        s = svc()
-        tf = _check_mode_timeframe(mode, timeframe)
-        if not s.ai_enabled:
-            return {"available": False,
-                    "reason": "Claude AI is not configured. Set ANTHROPIC_API_KEY in "
-                              "backend/.env and restart the backend."}
+        """Generate (or return the cached) Claude explanation for a setup."""
         try:
-            a = s.analysis(symbol, mode, tf)
-            recent = [b.to_dict() for b in
-                      s.market.get_candles(symbol, tf, "regular", BAR_LIMIT).completed_bars[-30:]]
-        except AnalysisBlocked as exc:
-            return {"available": False, "reason": f"Analysis paused: {exc.message}"}
-        except (DataError, ValueError) as exc:
-            return {"available": False, "reason": f"MARKET DATA UNAVAILABLE: {exc}"}
-        a["strategy_setups"], a["plan_status"] = s.strategy_summary(a["symbol"], mode)
-        feed = s.market.feed.id
-        sig = "|".join(f"{x['strategy_name']}:{x['direction']}:{x['timeframe']}:{x['status']}"
-                       for x in a["strategy_setups"])
-        cache_key = (f"{a['symbol']}|{mode}|{tf}|{a['analyzed_through']}|{s.analyst.model}|{feed}"
-                     f"|{sig}")
-        if not refresh and (cached := s.db.get_ai(cache_key)):
-            return {"available": True, "cached": True, "as_of": a["as_of"], **cached}
-        try:
-            result = s.analyst.explain(a, recent, s.is_demo)
-        except AIUnavailable as exc:
-            return {"available": False, "reason": str(exc)}
-        result["engine_status"] = a["plan_status"]
-        result["is_demo"] = s.is_demo
-        s.db.put_ai(cache_key, result)
-        return {"available": True, "cached": False, "as_of": a["as_of"], **result}
+            return svc().ai_explanation(symbol, mode, setup_id, refresh=refresh)
+        except DataError as exc:
+            raise _data_error(exc) from exc
 
     @app.post("/api/scan")
     def scan() -> dict:

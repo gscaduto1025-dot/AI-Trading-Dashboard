@@ -1,5 +1,5 @@
 import type {
-  AIResult,
+  AIResponse,
   Alert,
   Analysis,
   CandleResponse,
@@ -92,8 +92,10 @@ export const api = {
   strategySetups: () => request<StrategyEvaluation>("/api/strategies/setups"),
   plans: (symbol: string, mode: Mode) => request<PlansResponse>(`/api/plans/${symbol}?${q({ mode })}`),
   swingSetups: (sort: SwingSortKey = "quality") => request<SwingEvaluation>(`/api/swing/setups?${q({ sort })}`),
-  ai: (symbol: string, mode: Mode, timeframe: string, refresh = false) =>
-    request<AIResult>(`/api/ai/${symbol}?${q({ mode, timeframe, refresh })}`, { method: "POST" }),
+  aiCached: (symbol: string, mode: Mode, setupId: string | null) =>
+    request<AIResponse>(`/api/ai/${symbol}?${q({ mode, setup_id: setupId ?? undefined })}`),
+  aiGenerate: (symbol: string, mode: Mode, setupId: string | null, refresh = false) =>
+    request<AIResponse>(`/api/ai/${symbol}?${q({ mode, setup_id: setupId ?? undefined, refresh })}`, { method: "POST" }),
   scan: () => request<{ scanned_at: number; new_alerts: Alert[] }>("/api/scan", { method: "POST" }),
   recentSetups: (limit = 25) => request<{ setups: RecordedSetup[] }>(`/api/setups/recent?${q({ limit })}`),
   alerts: (limit = 50) => request<{ alerts: Alert[] }>(`/api/alerts?${q({ limit })}`),

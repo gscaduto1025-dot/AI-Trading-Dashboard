@@ -127,7 +127,10 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   intraday fixtures (see the key-level section below).
 - **Calendar and validation**: NYSE 2025/2026 holidays and early closes vs the published
   schedules, observance rules, session phases, DST, OHLCV and timestamp-order checks.
-- **Engine, demo data, API, alerts and Claude** (with a stubbed client).
+- **Claude explanations** (`tests/test_ai.py`, scripted fake client, no network): number
+  verification, schema validation, engine authority over status and levels, guarantee
+  filtering, every API failure mode, caching, setup selection and the endpoints.
+- **Engine, demo data, API and alerts.**
 
 ## How it works
 
@@ -146,7 +149,9 @@ backend/app/
   levels/                  key-level detection engine
   strategies/              day-trading strategy engine (5m/15m)
   swing/                   swing-trading strategy engine (daily/weekly, 4H/1H support)
-  ai/claude.py             Claude explanation (structured JSON output)
+  ai/facts.py              verified fact sheet Claude explains (all allowed numbers)
+  ai/validate.py           output schema + validation against the fact sheet
+  ai/claude.py             Claude request (structured JSON output, fallbacks)
   db.py                    SQLite: detected setups, alerts, AI response cache
   main.py                  FastAPI routes + background scanner
 frontend/src/components/
@@ -506,7 +511,7 @@ weights must sum to 100.
 - `GET /api/plans/{symbol}?mode=day|swing[&as_of=]`: every plan for a symbol, active plans first.
 - `GET /api/planning/config`: rules and weights.
 - Each setup in `/api/strategies/setups` and `/api/swing/setups` also carries its `plan`. The setup's status and numbers are exactly the plan's.
-- The Claude explanation receives the plans. Its verdict is capped by the best plan status: NO_TRADE → NO_TRADE, WATCHING → WAIT at most.
+- The Claude explanation receives the selected plan, and its final status is always the plan's status (see the AI section).
 
 **Dashboard**: the right sidebar is now the **Trade Plan** panel. It shows the following:
 - every price with its basis;
@@ -644,16 +649,82 @@ fixtures for the opening range, VWAP and breakout timing.
 
 - **Market bias** scores up to six factors (price vs slow EMA, fast vs slow EMA, slow EMA
   slope, RSI, price vs VWAP or SMA200, swing structure), each with an ATR dead-band so flat
-  markets read as neutral. It feeds the Market Bias panel and Claude's context.
+  markets read as neutral. It feeds the Market Bias panel and Claude's fact sheet.
 - The original single-pattern detector (ACTIONABLE / FORMING / NO TRADE) still powers the
   watchlist scan history ("Recently detected setups") and its alerts. It no longer drives
-  the dashboard's trade plans, the chart's plan lines or Claude's verdict cap; the
+  the dashboard's trade plans, the chart's plan lines or the AI analysis; the
   trade-planning engine does.
-- **Claude** gets the bias, key levels and the trade plans, and explains them. It may not
-  invent prices. The backend enforces that its verdict is never more aggressive than the
-  best plan status. Responses are cached in SQLite per bar and plan state so repeat views
-  don't cost API calls. The request uses server-side refusal fallbacks
-  (`fallbacks: "default"`).
+
+### AI analysis with Claude (`backend/app/ai`)
+
+Claude explains verified analysis; it never produces prices, levels, setups or statuses.
+
+**Fact sheet** (`facts.py`). For the selected setup (or the symbol's best plan in the current
+mode), the backend assembles a deterministic sheet from the market-data service and the
+analysis, key-level and planning engines:
+- market structure and bias factors;
+- the higher-timeframe trend;
+- moving-average values and alignment;
+- the VWAP relationship (day trading);
+- relative volume and feed coverage;
+- the ten nearest key levels, with evidence and distance;
+- the nearest support and resistance;
+- the full trade plan: trigger, entry, zone, stop, targets, risk/reward, confirmation and
+  invalidation conditions, conflicting signals and failed checks;
+- the data timestamp and data source (DEMO DATA is flagged).
+
+**Request** (`claude.py`):
+- One call to `claude-opus-5-5` (configurable with `CLAUDE_MODEL` / `CLAUDE_EFFORT`).
+- Structured outputs (`output_config.format` with a strict JSON schema).
+- Server-side refusal fallbacks (`fallbacks: "default"`).
+- A system prompt that requires every number to be copied from the sheet and forbids
+  forecasts and guarantees.
+
+**Output schema**: `symbol`, `trading_mode`, `market_bias`, `setup_name`, `setup_status`,
+`technical_summary`, `key_level_explanations[{level, explanation}]`, `setup_explanation`,
+`bullish_scenario`, `bearish_scenario`, `entry_conditions[]`, `invalidation_conditions[]`,
+`risk_explanation`, `data_timestamp`.
+
+**Validation** (`validate.py`), applied before anything is shown or cached:
+1. Schema: types, enums, required and unexpected fields. A violation rejects the response.
+2. Engine authority: `setup_status`, `market_bias`, `symbol`, `trading_mode`, `setup_name`
+   and `data_timestamp` are replaced by the engine values. Disagreements are listed as
+   corrections, so Claude can never override a status or a level.
+3. Numbers: every number in Claude's text must match a number in the fact sheet at the
+   precision Claude wrote it (prices, zones, percentages, `x:1` ratios, relative volume).
+   Indicator periods, small counts, dates and times are exempt. A sentence with an
+   unverified number is removed and reported.
+4. Claims: sentences promising outcomes ("guaranteed", "risk-free", "can't lose", "will
+   definitely", "100%", ...) are removed.
+5. If nothing verifiable remains in the technical summary, setup explanation or risk
+   analysis, the whole response is rejected.
+
+**Failure handling**: API errors (auth, rate limit, 5xx, network), refusals, truncated
+output, invalid JSON and failed validation all return `available: false` with "AI
+explanation unavailable: <reason>". The deterministic fact sheet, Trade Plan panel and all
+calculated analysis stay on screen. Failures are not cached.
+
+**Cost control**:
+- Explanations are cached in SQLite under a hash of the fact sheet, model, effort and prompt
+  version. The same candles and plan never cost a second call; a new candle or plan change
+  produces a new sheet.
+- `GET /api/ai/{symbol}` reads only the cache.
+- `POST /api/ai/{symbol}` generates (`refresh=true` forces a new call).
+- Concurrent requests for the same sheet share one call.
+
+**AI Analysis panel**: it follows the selected ticker and setup (or the symbol's best plan).
+On every change it first checks the cache. When **auto** is on, it generates after a
+0.9-second pause, so flicking through setups doesn't spend API calls. Turn **auto** off to
+generate only on demand.
+
+It shows:
+- the engine status, setup, bias, last price and data timestamp;
+- Claude's sections;
+- a validation footer: numbers verified, statements removed, fields reset to engine values,
+  and the model and time.
+
+Without `ANTHROPIC_API_KEY`, the panel shows the calculated analysis and the unavailable
+message.
 
 ### Alerts
 
@@ -681,7 +752,8 @@ notifications for actionable setups.
 | GET | `/api/levels/{symbol}?mode=day&timeframe=5Min[&as_of=2026-03-05T12:00]` | automatic key levels with evidence, strength, validity (point-in-time replay with `as_of`) |
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |
-| POST | `/api/ai/{symbol}?mode=day&timeframe=5Min[&refresh=true]` | Claude explanation |
+| GET | `/api/ai/{symbol}?mode=day\|swing[&setup_id=]` | cached Claude explanation + verified fact sheet (never calls Claude) |
+| POST | `/api/ai/{symbol}?mode=day\|swing[&setup_id=&refresh=true]` | generate (or return cached) validated Claude explanation |
 | POST | `/api/scan` | scan the watchlist now |
 | GET | `/api/setups/recent` | recently detected setups |
 | GET | `/api/alerts` / POST `/api/alerts/{id}/ack` | alerts |
