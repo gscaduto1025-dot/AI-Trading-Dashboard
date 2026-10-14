@@ -4,6 +4,10 @@ import type {
   AlertPrefs,
   AlertPrefsResponse,
   AlertsResponse,
+  BacktestDefaults,
+  BacktestRequest,
+  BacktestRunDetail,
+  BacktestRunRow,
   Analysis,
   CandleResponse,
   DataStatus,
@@ -134,6 +138,21 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  backtestDefaults: () => request<BacktestDefaults>("/api/backtests/config"),
+  backtests: () =>
+    request<{ runs: BacktestRunRow[]; running: { id: string; progress: number; message: string } | null }>(
+      "/api/backtests",
+    ),
+  backtest: (id: string, f: Record<string, string | undefined> = {}) =>
+    request<BacktestRunDetail>(`/api/backtests/${encodeURIComponent(id)}?${q(f)}`),
+  startBacktest: (body: BacktestRequest) =>
+    request<{ id: string; status: string }>("/api/backtests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deleteBacktest: (id: string) =>
+    request<{ ok: boolean }>(`/api/backtests/${encodeURIComponent(id)}`, { method: "DELETE" }),
   options: (symbol: string, mode: Mode, setupId: string | null, expiration: string | null) =>
     request<OptionsAnalysis>(
       `/api/options/${symbol}?${q({ mode, setup_id: setupId ?? undefined, expiration: expiration ?? undefined })}`,

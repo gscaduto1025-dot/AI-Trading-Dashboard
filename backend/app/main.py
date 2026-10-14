@@ -41,6 +41,7 @@ from .strategies.config import StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
 from .planning.config import PlanningConfig, load_planning_config
 from .alerts import ALERT_TYPES, AlertEngine, PrefsError, WebhookNotifier
+from .backtest.manager import BacktestBusy, BacktestManager
 from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
@@ -102,6 +103,7 @@ class Service:
         self.options = options or (AlpacaOptionsSource(client, settings.alpaca_options_feed)
                                    if client is not None and not self.is_demo else None)
         self.scanner = OpportunityScanner(self)
+        self.backtests = BacktestManager(self)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
     @property
@@ -934,6 +936,72 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     @app.get("/api/setups/recent")
     def recent_setups(limit: int = Query(25, ge=1, le=200), mode: str | None = None) -> dict:
         return {"setups": svc().db.recent_setups(limit, mode)}
+
+    @app.get("/api/backtests/config")
+    def backtest_config() -> dict:
+        """Default assumptions, data sources and documented limitations."""
+        return svc().backtests.defaults()
+
+    @app.post("/api/backtests")
+    def start_backtest(body: dict = Body(...)) -> dict:
+        """Start a backtest in the background (hypothetical trades only; no orders)."""
+        try:
+            run_id = svc().backtests.start(body)
+        except BacktestBusy as exc:
+            raise HTTPException(409, str(exc)) from None
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        return {"id": run_id, "status": "running"}
+
+    @app.get("/api/backtests")
+    def list_backtests(limit: int = Query(50, ge=1, le=200)) -> dict:
+        s = svc()
+        cur = s.backtests.current
+        return {"runs": s.db.backtests(limit),
+                "running": {k: cur[k] for k in ("id", "progress", "message")} if cur else None}
+
+    @app.get("/api/backtests/{run_id}")
+    def get_backtest(run_id: str, strategy: str | None = None, ticker: str | None = None,
+                     timeframe: str | None = None, direction: str | None = None,
+                     start: str | None = None, end: str | None = None) -> dict:
+        """A run with metrics recomputed for the given filters."""
+        try:
+            out = svc().backtests.report(run_id, strategy=strategy, ticker=ticker,
+                                         timeframe=timeframe, direction=direction,
+                                         start=start, end=end)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
+        if out is None:
+            raise HTTPException(404, "Backtest not found")
+        return out
+
+    @app.get("/api/backtests/{run_id}/trades.csv")
+    def backtest_csv(run_id: str) -> Response:
+        row = svc().db.backtest(run_id)
+        if row is None or not row.get("result"):
+            raise HTTPException(404, "Backtest not found or not finished")
+        cols = ["id", "ticker", "strategy", "timeframe", "direction", "signal_time",
+                "entry_time", "exit_time", "open", "entry", "stop", "target1", "target2",
+                "exit", "exit_reason", "risk_per_share", "pnl_per_share", "r", "gross_r",
+                "cost_per_share", "return_pct", "mae_r", "mfe_r", "bars_held", "planned_rr",
+                "quality"]
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(cols)
+        for t in row["result"]["trades"]:
+            w.writerow([datetime.fromtimestamp(t[c], NY).isoformat()
+                        if c.endswith("_time") else t.get(c) for c in cols])
+        return Response(buf.getvalue(), media_type="text/csv", headers={
+            "Content-Disposition": f'attachment; filename="backtest-{run_id}.csv"'})
+
+    @app.delete("/api/backtests/{run_id}")
+    def delete_backtest(run_id: str) -> dict:
+        s = svc()
+        if s.backtests.current and s.backtests.current["id"] == run_id:
+            raise HTTPException(409, "This backtest is still running")
+        if not s.db.delete_backtest(run_id):
+            raise HTTPException(404, "Backtest not found")
+        return {"ok": True}
 
     @app.get("/api/options/capabilities")
     def options_capabilities() -> dict:

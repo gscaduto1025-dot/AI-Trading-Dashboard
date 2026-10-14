@@ -142,6 +142,14 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   liquidity filters (volume, open interest), stale quotes and underlying data, missing or
   inconsistent Greeks/IV, call/put selection, the recommendation gates (feed, market hours,
   setup status), capped scenario estimates, stock- vs option-level risk, and the API.
+- **Backtesting** (`tests/test_backtest.py`):
+  - execution assumptions: next-open fills, costs, gaps, stop-first same-candle rule,
+    trade-through targets, session-close and time exits, split exits, delays;
+  - data integrity checks;
+  - signal timing: completed-candle slicing, future candles not changing past signals,
+    fast replay equal to an exhaustive candle-by-candle replay for day and swing, signals
+    equal to an independent live-engine evaluation;
+  - metrics, walk-forward isolation, the evidence verdict, and the API.
 - **Engine, demo data and API.**
 
 ## How it works
@@ -988,6 +996,30 @@ The risk notes explain:
 - short-dated and 0DTE risks: gamma, theta share of premium, auto-exercise, vanishing
   liquidity.
 
+### Backtesting (`backend/app/backtest`)
+
+The **Backtesting** tab replays history chronologically through the *live* strategy and
+planning engines. There are no separate backtest rules.
+- **Signals:** only candles complete at each moment are visible. A signal counts only if
+  the engine showed it as TRIGGERED at its confirmation time.
+- **Simulation:** next-open entries with spread, slippage, commission and optional delay.
+  When stop and target fall in the same candle, the stop is assumed first. Day trades are
+  flat at the close.
+- **Reports:** win rate, average win and loss, planned R:R, profit factor, expectancy with
+  a 95% CI, and max drawdown, by ticker, strategy, timeframe and direction.
+- **Validation:** in-sample vs out-of-sample, expanding walk-forward, and quality-score vs
+  outcome.
+- **Verdict:** the run gets an evidence verdict that never claims profitability without
+  enough out-of-sample evidence.
+- **Data:** Alpaca/demo history, or the bundled real AAPL/GOOG daily history (swing). An
+  optional point-in-time universe reduces survivorship bias.
+- **Dashboard:** equity and drawdown charts, R distribution, quality chart, breakdown tables,
+  a sortable trade-level report with CSV export, and filters for strategy, ticker,
+  timeframe, direction and dates.
+- Every assumption and limitation is documented in
+  **[docs/BACKTESTING.md](docs/BACKTESTING.md)**.
+- Hypothetical trades only: there is no real-money or automatic trading anywhere.
+
 ## API
 
 | Method | Path | Description |
@@ -1015,5 +1047,7 @@ The risk notes explain:
 | POST | `/api/alerts/{id}/ack` · `/api/alerts/ack-all` | mark read |
 | GET / PUT | `/api/alerts/preferences` (POST `/reset`) | alert types, preferences, webhook status |
 | GET | `/api/options/{symbol}?mode=day\|swing[&setup_id=&expiration=YYYY-MM-DD]` | option contracts evaluated for a stock setup (analysis only) |
+| GET / POST | `/api/backtests` · `/api/backtests/config` | list runs · start a run (background) · defaults and limitations |
+| GET / DELETE | `/api/backtests/{id}[?strategy=&ticker=&timeframe=&direction=&start=&end=]` · `/api/backtests/{id}/trades.csv` | filtered metrics and trades · CSV trade report |
 | GET | `/api/options/capabilities` · `/api/options/config` | options feeds, fields, restrictions · filter thresholds and weights |
 | GET / POST / DELETE | `/api/alerts/levels` (`{"ticker","price","condition?","note?"}`) · `/api/alerts/levels/{id}` | one-shot price-level alerts |

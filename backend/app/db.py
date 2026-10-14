@@ -85,6 +85,16 @@ CREATE TABLE IF NOT EXISTS alert_levels (
     triggered_price REAL,
     active INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS backtest_runs (
+    id TEXT PRIMARY KEY,
+    created_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    status TEXT NOT NULL,              -- running | done | failed | interrupted
+    request TEXT NOT NULL,
+    summary TEXT,
+    result TEXT,
+    error TEXT
+);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -302,6 +312,54 @@ class Database:
                 """UPDATE alert_levels SET active=0, triggered_at=?, triggered_price=?
                    WHERE id=? AND active=1""", (when, price, level_id))
         return cur.rowcount > 0
+
+    # ------------------------------------------------------------------------ backtests
+
+    def create_backtest(self, run_id: str, request: dict) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                "INSERT INTO backtest_runs (id, created_at, status, request) VALUES (?,?,?,?)",
+                (run_id, int(time.time()), "running", json.dumps(request)))
+
+    def finish_backtest(self, run_id: str, status: str, summary: dict | None = None,
+                        result: dict | None = None, error: str | None = None) -> None:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """UPDATE backtest_runs SET status=?, finished_at=?, summary=?, result=?, error=?
+                   WHERE id=?""",
+                (status, int(time.time()), json.dumps(summary) if summary else None,
+                 json.dumps(result) if result else None, error, run_id))
+
+    def backtests(self, limit: int = 50) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                """SELECT id, created_at, finished_at, status, request, summary, error
+                   FROM backtest_runs ORDER BY created_at DESC, id DESC LIMIT ?""",
+                (limit,)).fetchall()
+        return [{**dict(r), "request": json.loads(r["request"]),
+                 "summary": json.loads(r["summary"]) if r["summary"] else None} for r in rows]
+
+    def backtest(self, run_id: str) -> dict | None:
+        with self._lock:
+            r = self._conn.execute("SELECT * FROM backtest_runs WHERE id=?",
+                                   (run_id,)).fetchone()
+        if not r:
+            return None
+        return {**dict(r), "request": json.loads(r["request"]),
+                "summary": json.loads(r["summary"]) if r["summary"] else None,
+                "result": json.loads(r["result"]) if r["result"] else None}
+
+    def delete_backtest(self, run_id: str) -> bool:
+        with self._lock, self._conn:
+            cur = self._conn.execute("DELETE FROM backtest_runs WHERE id=?", (run_id,))
+        return cur.rowcount > 0
+
+    def interrupt_running_backtests(self) -> int:
+        with self._lock, self._conn:
+            cur = self._conn.execute(
+                "UPDATE backtest_runs SET status='interrupted', error=? WHERE status='running'",
+                ("The server stopped while this backtest was running.",))
+        return cur.rowcount
 
     # --------------------------------------------------------------------- watchlist / AI
 

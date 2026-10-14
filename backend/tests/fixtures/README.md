@@ -1,7 +1,8 @@
 # Historical candle fixtures
 
-Real daily OHLCV data used to test the key-level engine against independently computed
-reference values. These files are test inputs only; the app never displays them.
+Real daily OHLCV data used to test the key-level and swing engines against independently
+computed reference values. The backtester also offers them as the "bundled real daily
+history" data source (swing mode only); they are never shown as live prices.
 
 | File | Symbol | Range | Source | Adjustment |
 | --- | --- | --- | --- | --- |

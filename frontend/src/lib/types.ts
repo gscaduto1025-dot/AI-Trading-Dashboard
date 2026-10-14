@@ -957,3 +957,167 @@ export interface OptionsAnalysis {
   };
   chain_fetched_at?: number | null;
 }
+
+// ------------------------------------------------------------------------ backtesting
+
+/** Summary statistics for a set of hypothetical trades (backend app/backtest/metrics). */
+export interface BacktestStats {
+  trades: number;
+  wins?: number;
+  losses?: number;
+  win_rate?: number | null;
+  avg_win_r?: number | null;
+  avg_loss_r?: number | null;
+  avg_win_pct?: number | null;
+  avg_loss_pct?: number | null;
+  avg_planned_rr?: number | null;
+  realized_win_loss_ratio?: number | null;
+  profit_factor?: number | null;
+  expectancy_r?: number | null;
+  expectancy_pct?: number | null;
+  expectancy_ci95_r?: [number | null, number | null] | null;
+  std_r?: number | null;
+  total_r?: number;
+  max_drawdown_r?: number;
+  max_drawdown_pct?: number;
+  final_equity_pct?: number;
+  avg_bars_held?: number;
+  avg_cost_r?: number | null;
+  exits?: Record<string, number>;
+  until?: string;
+  from?: string;
+  period?: [string, string];
+}
+
+export interface BacktestTrade {
+  id: string;
+  ticker: string;
+  mode: Mode;
+  strategy: string;
+  strategy_name: string;
+  timeframe: string;
+  direction: "LONG" | "SHORT";
+  signal_time: number;
+  entry_time: number;
+  exit_time: number;
+  plan_entry: number | null;
+  open: number;
+  entry: number;
+  stop: number;
+  target1: number;
+  target2: number | null;
+  exit: number;
+  exit_reason: string;
+  legs: { fraction: number; target: number; exit: number; reason: string; time: number }[];
+  risk_per_share: number;
+  pnl_per_share: number;
+  r: number;
+  gross_r: number;
+  cost_per_share: number;
+  return_pct: number;
+  mae_r: number;
+  mfe_r: number;
+  bars_held: number;
+  planned_rr: number | null;
+  quality: number | null;
+}
+
+export interface BacktestReport {
+  filters: Record<string, string | null>;
+  overall: BacktestStats;
+  in_sample: BacktestStats;
+  out_of_sample: BacktestStats;
+  walk_forward: {
+    folds: {
+      fold: number;
+      train: [string, string];
+      test_period: [string, string];
+      train_trades: number;
+      min_quality: number;
+      train_expectancy_r: number | null;
+      test: BacktestStats;
+    }[];
+    oos: BacktestStats;
+    method: string;
+  };
+  by_ticker: Record<string, BacktestStats>;
+  by_strategy: Record<string, BacktestStats>;
+  by_timeframe: Record<string, BacktestStats>;
+  by_direction: Record<string, BacktestStats>;
+  quality: {
+    trades: number;
+    spearman: number | null;
+    t_stat: number | null;
+    buckets: { range: string; trades: number; win_rate: number | null; expectancy_r: number | null }[];
+    verdict: string;
+  };
+  equity: { points: { time: number; equity: number; drawdown_pct: number }[]; max_drawdown_pct: number; final_return_pct: number };
+  verdict: { label: string; positive_evidence: boolean; reasons: string[] };
+  skipped_reasons: Record<string, number>;
+  trades: BacktestTrade[];
+}
+
+export interface BacktestRequest {
+  mode: Mode;
+  data_source: "market" | "bundled";
+  symbols?: string[];
+  start: string;
+  end: string;
+  settings?: Record<string, unknown>;
+  universe?: { symbol: string; start?: string; end?: string }[] | null;
+}
+
+export interface BacktestRunRow {
+  id: string;
+  created_at: number;
+  finished_at: number | null;
+  status: "running" | "done" | "failed" | "interrupted";
+  request: BacktestRequest;
+  summary: {
+    trades: number;
+    win_rate: number | null;
+    expectancy_r: number | null;
+    profit_factor: number | null;
+    verdict: string;
+    is_demo: boolean;
+    duration_s: number;
+  } | null;
+  error: string | null;
+}
+
+export interface BacktestRunDetail extends BacktestRunRow {
+  live?: { progress: number; message: string };
+  run?: {
+    mode: Mode;
+    symbols: string[];
+    start: string;
+    end: string;
+    data_source: string;
+    data_description: string;
+    is_demo: boolean;
+    survivorship_biased: boolean;
+    settings: Record<string, unknown>;
+    not_live: { ticker: string; strategy: string; timeframe: string; direction: string; confirmed_at: number; reason: string }[];
+    data_integrity: { symbol: string; timeframe: string; bars: number; first: string | null; last: string | null; issues: string[] }[];
+    data_errors: { symbol: string; error: string }[];
+    engine_evaluations: number;
+    limitations: string[];
+  };
+  report?: BacktestReport;
+  skipped?: { ticker: string; strategy: string; timeframe: string; direction: string; seen_at: number; reason: string }[];
+}
+
+export interface BacktestDefaults {
+  settings: Record<string, unknown> & {
+    half_spread_bps: Record<Mode, number>;
+    slippage_bps: Record<Mode, number>;
+    commission_per_share: number;
+    entry_delay_bars: number;
+    exit_policy: string;
+    max_hold_bars: Record<Mode, number | null>;
+  };
+  limitations: string[];
+  max_days: Record<Mode, number>;
+  sources: Record<"market" | "bundled", { label: string; is_demo: boolean; modes: Mode[]; symbols: string[] }>;
+  order_execution: false;
+}

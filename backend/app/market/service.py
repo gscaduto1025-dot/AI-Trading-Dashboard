@@ -239,9 +239,11 @@ class MarketDataService:
         return result
 
     def get_history(self, symbol: str, timeframe: str, start: datetime, end: datetime,
-                    session: str = "regular") -> CandleSet:
-        """Full candle history between `start` and `end` (paginated) for analysis/backtests."""
-        symbol = self.check_symbol(symbol)
+                    session: str = "regular", any_symbol: bool = False) -> CandleSet:
+        """Full candle history between `start` and `end` (paginated) for analysis/backtests.
+        `any_symbol` allows tickers outside the watchlist (point-in-time backtest universes,
+        including delisted names); the caller validates the symbol format."""
+        symbol = symbol.upper() if any_symbol else self.check_symbol(symbol)
         tf = spec(timeframe)
         session = session if tf.intraday else "regular"
         now = self.now()
