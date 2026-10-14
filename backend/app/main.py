@@ -231,15 +231,17 @@ class Service:
             except DataError as exc:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
+            liquidity = market.consolidated_liquidity(sym) if as_of is None else None
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in ("5Min", "15Min")),
                    when < market.calendar.last_session_started(when, "regular").close,
-                   tuple(problems))
+                   tuple(problems), liquidity and round(liquidity["adv"]))
             cached = self._strategy_cache.get(key)
             if cached is None:
                 ctx, result = evaluate_symbol(sym, frames, when, market.calendar,
                                               self.strategy_config, problems,
-                                              planning=self.planning_config)
+                                              planning=self.planning_config,
+                                              liquidity=liquidity)
                 cached = [s.to_dict() for s in result]
                 self._strategy_cache = {k: v for k, v in self._strategy_cache.items()
                                         if k[0] != sym}  # keep only the newest per symbol
@@ -315,15 +317,17 @@ class Service:
             except DataError as exc:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
+            liquidity = market.consolidated_liquidity(sym) if as_of is None else None
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in self.SWING_FRAMES),
-                   tuple(problems))
+                   tuple(problems), liquidity and round(liquidity["adv"]))
             cached = self._swing_cache.get(key)
             if cached is None:
                 _, cached = evaluate_swing_symbol(sym, frames, when, market.calendar,
                                                   self.swing_config, problems,
                                                   is_demo=self.is_demo,
-                                                  planning=self.planning_config)
+                                                  planning=self.planning_config,
+                                                  liquidity=liquidity)
                 self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] != sym}
                 self._swing_cache[key] = cached
             setups += cached

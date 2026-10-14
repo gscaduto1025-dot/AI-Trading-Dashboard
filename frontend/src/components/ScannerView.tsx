@@ -121,11 +121,12 @@ function Table({ rows, title, tone, onOpen }: { rows: ScannerRow[]; title: strin
               const dir = r.direction === "LONG" ? "long" : "short";
               const dim = r.status === "NO_TRADE";
               const stale = r.data_freshness !== "fresh" && r.data_freshness !== "demo";
+              const liveFail = r.status === "TRIGGERED" && r.live_checks_failed.length > 0;
               return (
                 <tr
                   key={r.id}
                   onClick={() => onOpen(r)}
-                  title={dim || stale ? r.requirement_issues.join("\n") : r.reason}
+                  title={dim || stale || liveFail ? r.requirement_issues.join("\n") : r.reason}
                   className={`cursor-pointer transition hover:bg-white/[0.04] ${dim ? "opacity-60" : ""} ${stale ? "bg-bear/5" : ""}`}
                 >
                   <td className="py-1.5 pl-3 pr-2 font-bold">
@@ -154,6 +155,11 @@ function Table({ rows, title, tone, onOpen }: { rows: ScannerRow[]; title: strin
                       {STATUS_LABEL[r.status]}
                     </span>
                     {r.actionable && <span className="ml-1 text-[9px] font-bold text-bull">●</span>}
+                    {liveFail && (
+                      <span className="ml-1 text-[9px] font-bold text-wait" title={r.live_checks_failed.join("\n")}>
+                        ⚠ not actionable at live price
+                      </span>
+                    )}
                   </td>
                   <td className="whitespace-nowrap px-2 text-faint">
                     {et(r.last_updated)} <Fresh value={r.data_freshness} title={r.last_candle ? `Last candle ${et(r.last_candle, true)}` : undefined} />

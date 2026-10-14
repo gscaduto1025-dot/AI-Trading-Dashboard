@@ -178,6 +178,7 @@ def evaluate_symbol(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                     cal: MarketCalendar, cfg: StrategyConfig,
                     data_problems: list[str] | None = None,
                     strategies: list[Strategy] | None = None,
-                    planning=None) -> tuple[StrategyContext, list[Setup]]:
-    ctx = build_context(ticker, frames, as_of, cal, cfg, data_problems, planning)
+                    planning=None, liquidity: dict | None = None
+                    ) -> tuple[StrategyContext, list[Setup]]:
+    ctx = build_context(ticker, frames, as_of, cal, cfg, data_problems, planning, liquidity)
     return ctx, evaluate_context(ctx, strategies)

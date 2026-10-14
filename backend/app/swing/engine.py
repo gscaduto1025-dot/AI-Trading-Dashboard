@@ -137,7 +137,7 @@ def _evaluate_one(ctx, strat, tf, d, direction, full_history, evaluated_at, is_d
         "distance_to_trigger_pct": None, "distance_to_trigger_atr": None,
         "confirmation": [], "invalidation": [], "evidence": [], "supporting_levels": [],
         "reasons": [], "targets_basis": [], "trigger_time": None, "confirmed_at": None,
-        "outcome": None, "last_trigger": None, "triggers": [],
+        "outcome": None, "last_trigger": None, "triggers": [], "invalidation_price": None,
         "last_close": _r(last.close) if last else None,
         "last_candle": fmt_day(last.time) if last else None, "htf_bias": htf["label"],
         "evaluated_at": evaluated_at, "is_demo": is_demo,
@@ -191,8 +191,8 @@ def _evaluate_one(ctx, strat, tf, d, direction, full_history, evaluated_at, is_d
                        f"{fmt_day(t.time)} (completed close)."]
             setup.update({
                 "status": TRIGGERED, "confirmation": [c.to_dict() for c in t.conditions],
-                "invalidation": t.invalidation, "evidence": t.evidence,
-                "supporting_levels": t.levels, "trigger_time": t.time,
+                "invalidation": t.invalidation, "invalidation_price": _r(t.invalidation_price),
+                "evidence": t.evidence, "supporting_levels": t.levels, "trigger_time": t.time,
                 "confirmed_at": t.confirmed_at, "outcome": outcome,
                 "id": signal_id(ctx.ticker, strat.id, tf, direction, "swing", t.time),
                 "reasons": reasons})
@@ -278,7 +278,9 @@ def evaluate_swing_symbol(ticker: str, frames: dict[str, list[Bar]], as_of: date
                           data_problems: list[str] | None = None,
                           strategies: list[SwingStrategy] | None = None,
                           full_history: bool = False, is_demo: bool = False,
-                          planning=None) -> tuple[SwingContext, list[dict]]:
-    ctx = build_swing_context(ticker, frames, as_of, cal, cfg, data_problems, planning)
+                          planning=None, liquidity: dict | None = None
+                          ) -> tuple[SwingContext, list[dict]]:
+    ctx = build_swing_context(ticker, frames, as_of, cal, cfg, data_problems, planning,
+                              liquidity)
     return ctx, evaluate_swing_context(ctx, strategies, full_history=full_history,
                                        is_demo=is_demo)

@@ -262,6 +262,42 @@ class MarketDataService:
         self._cache.put(key, result, ttl, self._mono())
         return result
 
+    LIQUIDITY_SESSIONS = 20
+
+    def consolidated_liquidity(self, symbol: str) -> dict | None:
+        """Average daily dollar volume (close x volume) over the last 20 completed sessions
+        before the current one, from consolidated (SIP) daily bars.
+
+        Only for the IEX feed, whose volume is IEX's own trades - typically 1-6% of
+        consolidated volume - so a dollar-volume floor meant for market-wide liquidity
+        cannot be applied to it. Those sessions are all more than 15 minutes old, which
+        Alpaca's free plan allows for SIP. Returns None when not applicable or unavailable
+        (callers then fall back to the feed's own volume and say so)."""
+        if self.source.is_demo or self.feed.bars_feed != "iex":
+            return None
+        now = self.now()
+        current = self.calendar.last_session_started(self.cutoff(now), "regular").day
+        key = ("liquidity", symbol.upper(), current.isoformat())
+        cached = self._cache.get(key, self._mono())
+        if cached is not None:
+            return None if isinstance(cached, DataError) else cached
+        end = datetime.combine(current, datetime.min.time(), NY)
+        try:
+            raw = self.source.fetch_bars(symbol.upper(), "1Day", end - timedelta(days=45), end,
+                                         feed="sip")
+        except DataError as exc:
+            log.warning("Consolidated volume unavailable for %s: %s", symbol, exc)
+            self._cache.put(key, exc, 600.0, self._mono())
+            return None
+        recent = [b for b in raw if ny_date(b.time) < current][-self.LIQUIDITY_SESSIONS:]
+        if len(recent) < self.LIQUIDITY_SESSIONS // 2:
+            self._cache.put(key, DataError("too few consolidated sessions"), 600.0, self._mono())
+            return None
+        out = {"adv": sum(b.close * b.volume for b in recent) / len(recent),
+               "sessions": len(recent), "basis": "consolidated volume (SIP)"}
+        self._cache.put(key, out, 6 * 3600.0, self._mono())
+        return out
+
     def _build(self, symbol: str, tf: TimeframeSpec, session: str, raw: list[Bar],
                now: datetime, cal: MarketCalendar, limit: int | None) -> CandleSet:
         cutoff_ts = int(self.cutoff(now).timestamp())
@@ -376,6 +412,7 @@ class MarketDataService:
                phase: str) -> dict:
         out = {"symbol": symbol, "available": False, "price": None, "prev_close": None,
                "change": None, "change_pct": None, "volume": None, "price_time": None,
+               "day_high": None, "day_low": None,
                "session_date": current_day.isoformat(), "stale": False, "reason": None,
                "latency": "demo" if self.source.is_demo else self.feed.latency}
         if not snap:
@@ -392,6 +429,8 @@ class MarketDataService:
                 # Today's daily bar exists: compare with the previous session's close.
                 ref_close = float(prev["c"]) if prev.get("c") else None
                 volume = float(daily.get("v") or 0)
+                if daily.get("h") and daily.get("l"):
+                    out["day_high"], out["day_low"] = float(daily["h"]), float(daily["l"])
             else:
                 # No bar for today yet (e.g. early pre-market): the latest daily bar *is*
                 # the prior session, so compare with its close; no volume today yet.

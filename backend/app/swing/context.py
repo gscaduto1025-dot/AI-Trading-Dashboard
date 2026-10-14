@@ -194,7 +194,8 @@ class SwingContext:
 def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                         cal: MarketCalendar, cfg: SwingConfig,
                         data_problems: list[str] | None = None,
-                        planning: PlanningConfig | None = None) -> SwingContext:
+                        planning: PlanningConfig | None = None,
+                        liquidity: dict | None = None) -> SwingContext:
     as_ts = int(as_of.timestamp())
     tfs = {tf: build_tf(tf, frames.get(tf, []), cal, as_ts) for tf in ("1Day", "1Week")
            if frames.get(tf)}
@@ -207,9 +208,12 @@ def build_swing_context(ticker: str, frames: dict[str, list[Bar]], as_of: dateti
     else:
         recent = daily.bars[-20:]
         adv = sum(b.close * b.volume for b in recent) / len(recent)
+        basis = "on this feed"
+        if liquidity is not None:  # IEX volume is a small share of the market: use SIP
+            adv, basis = liquidity["adv"], f"on {liquidity['basis']}"
         if adv < cfg.gates.min_avg_dollar_volume:
             gate.append(f"Insufficient liquidity: average daily dollar volume ${adv / 1e6:.1f}M "
-                        f"< ${cfg.gates.min_avg_dollar_volume / 1e6:.0f}M on this feed")
+                        f"< ${cfg.gates.min_avg_dollar_volume / 1e6:.0f}M {basis}")
     levels, note = [], None
     try:
         report = compute_key_levels(ticker, "swing", {tf: frames.get(tf, []) for tf in

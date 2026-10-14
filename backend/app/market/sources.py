@@ -67,14 +67,16 @@ class AlpacaSource:
         self.adjustment = adjustment
 
     def fetch_bars(self, symbol: str, timeframe: str, start: datetime, end: datetime,
-                   max_items: int = 50_000) -> list[Bar]:
+                   max_items: int = 50_000, feed: str | None = None) -> list[Bar]:
+        """`feed` overrides the configured bars feed (used for consolidated SIP history,
+        which the free plan allows for data older than 15 minutes)."""
         params = {
             "symbols": symbol,
             "timeframe": timeframe,
             "start": _rfc3339(start),
             "end": _rfc3339(end),
             "adjustment": self.adjustment,
-            "feed": self.feed.bars_feed,
+            "feed": feed or self.feed.bars_feed,
             "sort": "asc",
         }
         bars: list[Bar] = []

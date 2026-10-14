@@ -283,8 +283,9 @@ def test_scanner_alerts_match_scanner_rows(tmp_path):
     rows = {r["id"]: r for r in snap_["rows"]}
     trig = [a for a in snap_["new_alerts"] if a["actionable"]]
     assert trig, "demo data has TRIGGERED setups"
-    assert {a["setup_id"] for a in trig} == {r["id"] for r in snap_["rows"]
-                                             if r["status"] == "TRIGGERED"}
+    # Only TRIGGERED rows that still hold at the live price are actionable (live_check).
+    assert {a["setup_id"] for a in trig} == {r["id"] for r in snap_["rows"] if r["actionable"]}
+    assert any(r["status"] == "TRIGGERED" and not r["actionable"] for r in snap_["rows"])
     for a in trig:
         r = rows[a["setup_id"]]
         assert (a["stop"], a["risk_reward"], a["entry"]) == (r["stop"], r["risk_reward"], r["entry"])

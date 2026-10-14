@@ -297,7 +297,8 @@ def build_tf(tf: str, bars: list[Bar], session: SessionDay, cal: MarketCalendar,
 def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
                   cal: MarketCalendar, cfg: StrategyConfig,
                   data_problems: list[str] | None = None,
-                  planning: PlanningConfig | None = None) -> StrategyContext:
+                  planning: PlanningConfig | None = None,
+                  liquidity: dict | None = None) -> StrategyContext:
     as_ts = int(as_of.timestamp())
     session = cal.last_session_started(as_of, "regular")
     session_open = as_of < session.close
@@ -333,9 +334,12 @@ def build_context(ticker: str, frames: dict[str, list[Bar]], as_of: datetime,
     recent = daily[-20:]
     if recent:
         adv = sum(b.close * b.volume for b in recent) / len(recent)
+        basis = "on this feed"
+        if liquidity is not None:  # IEX volume is a small share of the market: use SIP
+            adv, basis = liquidity["adv"], f"on {liquidity['basis']}"
         if adv < g.min_avg_dollar_volume:
             gate.append(f"Insufficient liquidity: average daily dollar volume ${adv / 1e6:.1f}M "
-                        f"< ${g.min_avg_dollar_volume / 1e6:.0f}M on this feed")
+                        f"< ${g.min_avg_dollar_volume / 1e6:.0f}M {basis}")
     else:
         gate.append("No daily history before this session")
     if daily_atr is None:

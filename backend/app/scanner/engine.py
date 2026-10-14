@@ -49,14 +49,62 @@ def _num(plan: dict | None, k: str):
 
 # ----------------------------------------------------------------------------- rows
 
+def live_quote(q: dict | None) -> dict | None:
+    """The latest trade (and today's range) if it is usable to revalidate a trigger."""
+    if not q or not q.get("available") or q.get("stale") or q.get("price") is None:
+        return None
+    return {"price": q["price"], "time": q.get("price_time"),
+            "day_high": q.get("day_high"), "day_low": q.get("day_low")}
+
+
+def live_check(s: dict, mode: str, live: dict | None) -> list[str]:
+    """Revalidate a TRIGGERED plan against the latest trade. Triggers are confirmed on
+    completed candles (for swing setups, the previous daily or weekly close), so price may
+    have moved since: a plan is actionable only if, at the current price, the stop has not
+    been reached, the setup is not invalidated, T1 is still ahead and reward/risk from the
+    current price still meets the planning minimum. Returns the failed checks."""
+    plan = s.get("plan") or {}
+    entry, stop, t1 = _num(plan, "entry"), _num(plan, "stop"), _num(plan, "target1")
+    if live is None:
+        return ["No fresh live price to revalidate the trigger against"]
+    if stop is None or t1 is None or entry is None:
+        return []  # incomplete plan: reported elsewhere (alerts: incomplete())
+    price = live["price"]
+    sg = 1 if s["direction"] == "LONG" else -1
+    out = []
+    if sg * (price - stop) <= 0:
+        out.append(f"Live price {price:.2f} is at or beyond the stop {stop:.2f}")
+    elif mode == "swing":
+        # Today's session is not a completed candle yet, so the engine has not seen it.
+        adverse = live.get("day_low") if sg > 0 else live.get("day_high")
+        if adverse is not None and sg * (adverse - stop) <= 0:
+            out.append(f"Stop {stop:.2f} was reached intraday today ("
+                       f"{'low' if sg > 0 else 'high'} {adverse:.2f})")
+    inv = s.get("invalidation_price")
+    if inv is not None and sg * (price - inv) < 0:
+        out.append(f"Live price {price:.2f} is beyond the invalidation level {inv:.2f}; the "
+                   f"setup is cancelled if the {s['timeframe']} candle closes there")
+    if sg * (price - t1) >= 0:
+        out.append(f"Live price {price:.2f} has already reached T1 {t1:.2f}")
+    elif not out:
+        min_rr = plan.get("min_rr")
+        rr = sg * (t1 - price) / (sg * (price - stop))
+        if min_rr is not None and rr < min_rr - 1e-9:
+            out.append(f"Reward/risk from the live price {price:.2f} is {rr:.2f}:1 "
+                       f"< {min_rr:g}:1 (entry was {entry:.2f})")
+    return out
+
+
 def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
-              data: dict) -> dict:
-    """One scanner row, copied from an engine setup and its plan (no recalculation)."""
+              data: dict, live: dict | None = None) -> dict:
+    """One scanner row, copied from an engine setup and its plan (no recalculation), plus
+    a revalidation of TRIGGERED plans against the live price (`live`, see live_check)."""
     plan = s.get("plan") or {}
     trig = _num(plan, "entry_trigger")
     sgn = 1 if s["direction"] == "LONG" else -1
     status = s["status"]
     fresh = data.get("freshness") in FRESH_OK
+    live_fail = live_check(s, mode, live) if status == "TRIGGERED" else []
     issues = []
     if status == "NO_TRADE":
         issues = [c["name"] + ": " + c["detail"] for c in plan.get("checks", [])
@@ -64,8 +112,14 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
     last = s.get("last_trigger") or {}  # swing: a trigger that already resolved
     trig_time = s.get("trigger_time") or last.get("time")
     outcome = s.get("outcome") or last.get("outcome")
+    issues += live_fail
     if not fresh:
         issues.insert(0, f"Data {data.get('freshness')}: {data.get('reason') or 'not usable'}")
+    live_rr = None
+    if live and status == "TRIGGERED" and _num(plan, "stop") is not None \
+            and _num(plan, "target1") is not None:
+        risk = sgn * (live["price"] - _num(plan, "stop"))
+        live_rr = round(sgn * (_num(plan, "target1") - live["price"]) / risk, 2) if risk > 0 else None
     return {
         "id": s["id"], "ticker": s["ticker"], "mode": mode, "price": price,
         "market_bias": bias, "setup": s["strategy_name"], "strategy": s["strategy"],
@@ -77,7 +131,11 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
         "quality": (plan.get("quality") or {}).get("score"),
         "status": status,
         "meets_requirements": status != "NO_TRADE",
-        "actionable": status == "TRIGGERED" and fresh,
+        "actionable": status == "TRIGGERED" and fresh and not live_fail,
+        "live_price": live["price"] if live else None,
+        "live_price_time": live["time"] if live else None,
+        "live_risk_reward": live_rr,
+        "live_checks_failed": live_fail,
         "requirement_issues": issues,
         "reason": (s.get("reasons") or [""])[0],
         "distance_to_trigger_pct": (round(100 * sgn * (trig - price) / price, 2)
@@ -298,7 +356,8 @@ class OpportunityScanner:
                 for s in engine[mode]["setups"]:
                     if s["ticker"] != sym:
                         continue
-                    row = setup_row(s, mode, info["price"], info["bias"].get(mode), data)
+                    row = setup_row(s, mode, info["price"], info["bias"].get(mode), data,
+                                    live_quote(q))
                     states.append(row)  # every evaluated setup, for the alert engine
                     if not include_row(s):
                         continue

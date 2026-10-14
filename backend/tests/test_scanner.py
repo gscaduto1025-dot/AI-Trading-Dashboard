@@ -81,7 +81,10 @@ def test_rows_failing_requirements_are_identified(scanned):
     for r in snap["rows"]:
         assert r["meets_requirements"] == (r["status"] != "NO_TRADE")
         assert r["actionable"] == (r["status"] == "TRIGGERED" and
-                                   r["data_freshness"] in ("fresh", "demo"))
+                                   r["data_freshness"] in ("fresh", "demo") and
+                                   not r["live_checks_failed"])
+        if r["status"] == "TRIGGERED" and r["live_checks_failed"]:
+            assert set(r["live_checks_failed"]) <= set(r["requirement_issues"])
         if r["status"] == "NO_TRADE":
             assert r["requirement_issues"]
             assert r["entry_trigger"] is not None  # a pattern was detected

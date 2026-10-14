@@ -638,6 +638,28 @@ tables.
 flagged in red with the reason. The engines' data gates make its setups NO_TRADE, and the
 scanner marks them not actionable ("Data stale: ..."). The other tickers are unaffected.
 
+**Live-price revalidation.** Triggers are confirmed on completed candles: for swing
+setups that is the previous daily or weekly close, so price may have moved a long way
+since. A TRIGGERED row is `actionable` only if, at the latest trade (a fresh, non-stale
+quote):
+- price has not reached the stop (swing: neither has today's session low/high, which no
+  completed candle has shown yet);
+- price is not beyond the setup's invalidation level (swing);
+- price has not reached T1;
+- reward/risk from the live price to T1 still meets the planning minimum.
+
+Failures are listed in `live_checks_failed` (also in `requirement_issues`) and the scanner
+shows "not actionable at live price". Rows also carry `live_price` and `live_risk_reward`.
+The engine's status, plan and signal log are unchanged; a row with no fresh live price is
+not actionable. Actionable alerts follow the row's `actionable` flag.
+
+**Liquidity on the IEX feed.** IEX volume is IEX's own trades, typically 1-6% of the
+consolidated tape, so the `min_avg_dollar_volume` gate (day and swing) is evaluated on
+consolidated (SIP) daily volume of the 20 sessions before the current one. Alpaca's free
+plan allows that history (it is older than 15 minutes). If it can't be fetched, the gate
+falls back to the feed's own volume and says "on this feed". Backtests and `as_of`
+replays still use the feed's volume.
+
 **Filters** (UI and `GET /api/scanner`):
 - `mode=day|swing`;
 - `side=bullish|bearish`;
@@ -678,6 +700,8 @@ Clicking a ticker card opens its chart.
 - requirement failures and actionability are set correctly;
 - ticker summaries, and every filter;
 - stale and unavailable tickers are flagged and never actionable;
+- TRIGGERED rows are revalidated against the live price (`tests/test_live_revalidation.py`,
+  which also covers the consolidated-volume liquidity gate);
 - candle-aware scheduling: no rescan inside a forming 5-minute candle, rescans on a new
   candle, the close or a watchlist change;
 - no Claude calls;

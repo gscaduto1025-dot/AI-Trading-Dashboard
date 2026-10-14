@@ -278,7 +278,7 @@ export default function AIPanel({
                     <ul className="space-y-0.5 text-[11px] text-ink/85">
                       <li>
                         Market bias: <span className={BIAS_CLS[facts.market_bias.label]}>{facts.market_bias.label}</span> (score{" "}
-                        {facts.market_bias.score}/{facts.market_bias.max_score})
+                        {facts.market_bias.score}/{facts.market_bias.max_score}) on the {facts.chart_timeframe} candles of this setup
                       </li>
                       {facts.vwap && (
                         <li className="num">

@@ -713,6 +713,11 @@ export interface ScannerRow {
   status: StrategyStatus;
   meets_requirements: boolean;
   actionable: boolean;
+  /** TRIGGERED plans revalidated against the latest trade (see backend live_check). */
+  live_price: number | null;
+  live_price_time: string | null;
+  live_risk_reward: number | null;
+  live_checks_failed: string[];
   requirement_issues: string[];
   reason: string;
   distance_to_trigger_pct: number | null;
