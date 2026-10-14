@@ -13,7 +13,7 @@ import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
@@ -40,6 +40,7 @@ from .strategies.common import TRIGGERED, signal_id
 from .strategies.config import StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
 from .planning.config import PlanningConfig, load_planning_config
+from .alerts import ALERT_TYPES, AlertEngine, PrefsError, WebhookNotifier
 from .scanner.engine import OpportunityScanner, filter_rows
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
@@ -88,6 +89,9 @@ class Service:
             self.market.set_symbols(saved)
         else:
             self.db.set_watchlist(self.market.symbols)
+        notifier = (WebhookNotifier(settings.alert_webhook_url)
+                    if settings.alert_webhook_url else None)
+        self.alerts = AlertEngine(self.db, notifier=notifier)
         self.scanner = OpportunityScanner(self)
         self._swing_cache: dict[tuple, list[dict]] = {}
 
@@ -206,7 +210,7 @@ class Service:
         when = market.cutoff() if as_of is None else min(as_of, market.cutoff())
         setups: list[dict] = []
         per_symbol: dict[str, dict] = {}
-        new_alerts: list[dict] = []
+        new_signals: list[str] = []
         for sym in symbols:
             try:
                 frames, problems = self._strategy_frames(sym, when, as_of is not None)
@@ -234,14 +238,14 @@ class Service:
                 "triggered": sum(s["status"] == TRIGGERED for s in cached),
                 "watching": sum(s["status"] == "WATCHING" for s in cached)}
             if record and as_of is None:
-                new_alerts += self._record_signals(cached)
+                new_signals += self._record_signals(cached)
         order = {"TRIGGERED": 0, "WATCHING": 1, "NO_TRADE": 2}
         setups.sort(key=lambda s: (order[s["status"]], -(s["confirmed_at"] or 0), s["ticker"],
                                    s["strategy"], s["timeframe"], s["direction"]))
         return {"evaluated_at": when.astimezone(NY).isoformat(), "replay": as_of is not None,
                 "universe": symbols, "timeframes": ["5Min", "15Min"],
                 "context_timeframes": ["1Hour", "1Day"], "symbols": per_symbol,
-                "is_demo": self.is_demo, "setups": setups, "new_alerts": new_alerts,
+                "is_demo": self.is_demo, "setups": setups, "new_signals": new_signals,
                 "strategies": [{"id": st.id, "name": st.name} for st in STRATEGIES]}
 
     def _strategy_frames(self, sym: str, when: datetime, replay: bool):
@@ -259,10 +263,9 @@ class Service:
             frames[tf] = candles.bars
         return frames, problems
 
-    def _record_signals(self, setups: list[dict]) -> list[dict]:
-        """Append every accepted trigger to the immutable signal log (alerts on new ones)."""
-        names = {st.id: st.name for st in STRATEGIES}
-        alerts = []
+    def _record_signals(self, setups: list[dict]) -> list[str]:
+        """Append every accepted trigger to the immutable signal log; returns new ids."""
+        new = []
         for s in setups:
             for t in s.get("triggers_today", []):
                 if not t["accepted"]:
@@ -270,10 +273,9 @@ class Service:
                 sid = signal_id(s["ticker"], s["strategy"], s["timeframe"], s["direction"],
                                 s["session_date"], t["time"])
                 payload = s if s["trigger_time"] == t["time"] else {**s, "note": "earlier trigger"}
-                alert = self.db.record_signal(sid, payload, t, self.is_demo, names[s["strategy"]])
-                if alert:
-                    alerts.append(alert)
-        return alerts
+                if self.db.record_signal(sid, payload, t, self.is_demo):
+                    new.append(sid)
+        return new
 
     # ------------------------------------------------------- swing-trading strategies
 
@@ -292,7 +294,7 @@ class Service:
         when = market.cutoff() if as_of is None else min(as_of, market.cutoff())
         setups: list[dict] = []
         per_symbol: dict[str, dict] = {}
-        new_alerts: list[dict] = []
+        new_signals: list[str] = []
         for sym in symbols:
             try:
                 frames, problems = self._swing_frames(sym, when, as_of is not None)
@@ -317,12 +319,12 @@ class Service:
                                "triggered": sum(s["status"] == TRIGGERED for s in cached),
                                "watching": sum(s["status"] == "WATCHING" for s in cached)}
             if record and as_of is None:
-                new_alerts += self._record_swing_signals(cached)
+                new_signals += self._record_swing_signals(cached)
         return {"evaluated_at": when.astimezone(NY).isoformat(), "replay": as_of is not None,
                 "mode": "swing", "universe": symbols, "timeframes": list(self.SWING_REQUIRED),
                 "supporting_timeframes": ["4Hour", "1Hour"], "symbols": per_symbol,
                 "sort": sort, "sort_keys": list(SORT_KEYS), "is_demo": self.is_demo,
-                "setups": sort_setups(setups, sort), "new_alerts": new_alerts,
+                "setups": sort_setups(setups, sort), "new_signals": new_signals,
                 "strategies": [{"id": st.id, "name": st.name} for st in SWING_STRATEGIES]}
 
     def _swing_frames(self, sym: str, when: datetime, replay: bool):
@@ -355,19 +357,17 @@ class Service:
             frames[tf] = candles.bars
         return frames, problems
 
-    def _record_swing_signals(self, setups: list[dict]) -> list[dict]:
-        """Log each fresh, accepted swing trigger once (immutable) and alert on new ones."""
-        names = {st.id: st.name for st in SWING_STRATEGIES}
-        alerts = []
+    def _record_swing_signals(self, setups: list[dict]) -> list[str]:
+        """Log each fresh, accepted swing trigger once (immutable); returns new ids."""
+        new = []
         for s in setups:
             if s["status"] != TRIGGERED:
                 continue
             t = next(t for t in s["triggers"] if t["time"] == s["trigger_time"])
-            alert = self.db.record_signal(s["id"], {**s, "session_date": fmt_day(t["time"])}, t,
-                                          self.is_demo, names[s["strategy"]], mode="swing")
-            if alert:
-                alerts.append(alert)
-        return alerts
+            if self.db.record_signal(s["id"], {**s, "session_date": fmt_day(t["time"])}, t,
+                                     self.is_demo, mode="swing"):
+                new.append(s["id"])
+        return new
 
     def plans_for(self, symbol: str, mode: str, as_of: datetime | None = None) -> dict:
         """Every trade plan for one symbol in one mode, active plans first by quality.
@@ -512,8 +512,42 @@ class Service:
         self._swing_cache = {k: v for k, v in self._swing_cache.items() if k[0] in keep}
 
 
+    # ------------------------------------------------------------- user price levels
+
+    def add_price_level(self, ticker: str, price: float, condition: str | None,
+                        note: str) -> dict:
+        """One-shot alert when price reaches `price`. `condition` (above/below) defaults to
+        the side of the current price; a level that is already satisfied is rejected."""
+        sym = self.market.check_symbol(ticker)
+        if not (price > 0):
+            raise InvalidRequest("price must be positive")
+        if condition not in (None, "above", "below"):
+            raise InvalidRequest("condition must be 'above' or 'below'")
+        try:
+            current = next((q.get("price") for q in self.market.get_quotes()
+                            if q["symbol"] == sym), None)
+        except DataError:
+            current = None
+        if current is None and condition is None:
+            raise InvalidRequest("No current price is available; specify condition above/below.")
+        if condition is None:
+            condition = "above" if price > current else "below"
+        if current is not None and (current >= price if condition == "above"
+                                    else current <= price):
+            raise InvalidRequest(f"{sym} is already {condition} {price:.2f} "
+                                 f"(price {current:.2f}).")
+        return self.db.add_price_level(sym, round(price, 4), condition, note.strip()[:120])
+
+
 class WatchlistChange(BaseModel):
     symbol: str
+
+
+class PriceLevelIn(BaseModel):
+    ticker: str
+    price: float
+    condition: str | None = None
+    note: str = ""
 
 
 class AnalysisBlocked(Exception):
@@ -603,6 +637,14 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             "default_timeframes": DEFAULT_TIMEFRAME,
             "last_scan": s.last_scan,
             "scan_interval_seconds": s.settings.scan_interval_seconds,
+            "scanner": {"scan_count": s.scanner.scan_count, "due": s.scanner.due(),
+                        "last_error": s.scanner.last_error,
+                        "last_finished_at": (s.scanner.snapshot or {}).get("finished_at")},
+            "alerts": {**s.db.alert_counts(), "webhook": s.alerts.notifier is not None,
+                       "last_run": ({k: v for k, v in s.alerts.last_run.items()
+                                     if k != "suppressed"}
+                                    | {"suppressed": len(s.alerts.last_run["suppressed"])}
+                                    if s.alerts.last_run else None)},
             "live_trading": False,
             "disclaimer": DISCLAIMER,
         }
@@ -652,7 +694,8 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
         rows = filter_rows(snap["rows"], mode=mode, side=side, status=status, min_rr=min_rr,
                            min_quality=min_quality, strategy=strategy,
                            include_no_trade=include_no_trade)
-        return {**{k: v for k, v in snap.items() if k not in ("rows", "results", "new_alerts")},
+        hidden = ("rows", "results", "new_alerts", "setup_states")
+        return {**{k: v for k, v in snap.items() if k not in hidden},
                 "rows": rows, "total_rows": len(snap["rows"]),
                 "due": s.scanner.due(), "scan_count": s.scanner.scan_count,
                 "poll_seconds": s.settings.scan_interval_seconds,
@@ -662,7 +705,8 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     def scanner_run() -> dict:
         snap = svc().scanner.run(force=True, trigger="manual")
         return {"scan_id": snap["scan_id"], "finished_at": snap["finished_at"],
-                "rows": len(snap["rows"]), "duration_ms": snap["duration_ms"]}
+                "rows": len(snap["rows"]), "duration_ms": snap["duration_ms"],
+                "new_alerts": len(snap["new_alerts"])}
 
     @app.get("/api/bars/{symbol}")
     def bars(symbol: str, timeframe: str = "5Min", session: str = "regular",
@@ -818,13 +862,68 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
         return {"setups": svc().db.recent_setups(limit, mode)}
 
     @app.get("/api/alerts")
-    def alerts(limit: int = Query(50, ge=1, le=200), unacknowledged: bool = False) -> dict:
-        return {"alerts": svc().db.alerts(limit, unacknowledged)}
+    def alerts(limit: int = Query(50, ge=1, le=500), unacknowledged: bool = False,
+               ticker: str | None = None, type: str | None = None,
+               after_id: int | None = None) -> dict:
+        """Alerts produced by the server-side alert engine (newest first)."""
+        s = svc()
+        types = [t.strip() for t in type.split(",")] if type else None
+        if types and not set(types) <= set(ALERT_TYPES):
+            raise HTTPException(400, f"type must be among {', '.join(ALERT_TYPES)}")
+        return {"alerts": s.db.alerts(limit, unacknowledged, ticker.upper() if ticker else None,
+                                      types, after_id),
+                "counts": s.db.alert_counts(),
+                "last_run": s.alerts.last_run, "is_demo": s.is_demo}
+
+    @app.post("/api/alerts/ack-all")
+    def ack_all() -> dict:
+        return {"ok": True, "acknowledged": svc().db.acknowledge_all_alerts()}
 
     @app.post("/api/alerts/{alert_id}/ack")
     def ack(alert_id: int) -> dict:
         if not svc().db.acknowledge_alert(alert_id):
             raise HTTPException(404, "Alert not found")
+        return {"ok": True}
+
+    def _prefs_body(s: Service, prefs: dict) -> dict:
+        n = s.alerts.notifier
+        return {"preferences": prefs, "types": ALERT_TYPES,
+                "webhook": {"configured": n is not None, "host": n.host if n else None}}
+
+    @app.get("/api/alerts/preferences")
+    def alert_prefs() -> dict:
+        s = svc()
+        return _prefs_body(s, s.alerts.prefs())
+
+    @app.put("/api/alerts/preferences")
+    def update_alert_prefs(body: dict = Body(...)) -> dict:
+        s = svc()
+        try:
+            return _prefs_body(s, s.alerts.update_prefs(body))
+        except PrefsError as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    @app.post("/api/alerts/preferences/reset")
+    def reset_alert_prefs() -> dict:
+        s = svc()
+        return _prefs_body(s, s.alerts.reset_prefs())
+
+    @app.get("/api/alerts/levels")
+    def price_levels() -> dict:
+        return {"levels": svc().db.price_levels()}
+
+    @app.post("/api/alerts/levels")
+    def add_price_level(body: PriceLevelIn) -> dict:
+        try:
+            return {"level": svc().add_price_level(body.ticker, body.price, body.condition,
+                                                   body.note)}
+        except InvalidRequest as exc:
+            raise HTTPException(400, str(exc)) from None
+
+    @app.delete("/api/alerts/levels/{level_id}")
+    def delete_price_level(level_id: int) -> dict:
+        if not svc().db.delete_price_level(level_id):
+            raise HTTPException(404, "Level not found")
         return {"ok": True}
 
     return app

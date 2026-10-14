@@ -48,6 +48,7 @@ class Settings:
     watchlist: list[str] = field(default_factory=lambda: list(DEFAULT_WATCHLIST))
     scan_interval_seconds: int = 30  # scheduler poll; a scan runs only on new candles
     cors_origins: list[str] = field(default_factory=lambda: ["http://localhost:3000"])
+    alert_webhook_url: str = field(default="", repr=False)  # may embed a secret token
 
     @property
     def alpaca_enabled(self) -> bool:
@@ -85,6 +86,7 @@ def load_settings() -> Settings:
         database_path=Path(db_path) if db_path else BACKEND_DIR / "tradescope.db",
         watchlist=watchlist,
         scan_interval_seconds=int(os.environ.get("SCAN_INTERVAL_SECONDS", "30")),
+        alert_webhook_url=(env("ALERT_WEBHOOK_URL") or "").strip(),
         cors_origins=[
             o.strip()
             for o in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")

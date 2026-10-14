@@ -137,7 +137,8 @@ def _evaluate_one(ctx, strat, tf, d, direction, full_history, evaluated_at, is_d
         "distance_to_trigger_pct": None, "distance_to_trigger_atr": None,
         "confirmation": [], "invalidation": [], "evidence": [], "supporting_levels": [],
         "reasons": [], "targets_basis": [], "trigger_time": None, "confirmed_at": None,
-        "outcome": None, "triggers": [], "last_close": _r(last.close) if last else None,
+        "outcome": None, "last_trigger": None, "triggers": [],
+        "last_close": _r(last.close) if last else None,
         "last_candle": fmt_day(last.time) if last else None, "htf_bias": htf["label"],
         "evaluated_at": evaluated_at, "is_demo": is_demo,
     }
@@ -178,6 +179,7 @@ def _evaluate_one(ctx, strat, tf, d, direction, full_history, evaluated_at, is_d
         inv = _invalidated(d, t.index, direction, t.invalidation_price)
         if outcome["state"] in ("stopped", "target1_then_stopped", "target2"):
             stale_note = f"Last trigger {fmt_day(t.time)} already resolved ({outcome['state']})."
+            setup["last_trigger"] = {"time": t.time, "outcome": outcome}  # for the alert engine
         elif inv is not None:
             stale_note = (f"Last trigger {fmt_day(t.time)} was invalidated by the close on "
                           f"{fmt_day(d.bars[inv].time)}.")

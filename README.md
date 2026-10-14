@@ -132,7 +132,12 @@ This runs the backend pytest suite, then the frontend typecheck, ESLint and the 
   filtering, every API failure mode, caching, setup selection and the endpoints.
 - **Opportunity scanner** (`tests/test_scanner.py`): rows equal the engine output, filters,
   ranking, stale-data flags, candle-aware scheduling, no Claude calls, watchlist management.
-- **Engine, demo data, API and alerts.**
+- **Alert engine** (`tests/test_alerts.py`): WATCHING→TRIGGERED, invalidation and
+  target/stop transitions; duplicate prevention across rescans, restarts and lost state;
+  cooldowns with a controllable clock; stale, unavailable and incomplete data never
+  producing an actionable alert; preferences, price levels, the webhook (and that its URL
+  never leaks), the API, and alerts created by the background scheduler with no client.
+- **Engine, demo data and API.**
 
 ## How it works
 
@@ -814,20 +819,89 @@ Clicking a ticker card opens its chart.
 - no Claude calls;
 - watchlist add/remove/validation/persistence, and the API.
 
-### Alerts
+### Alert engine (`backend/app/alerts`)
 
-The scheduled scanner (and **Scan now**) records alerts:
-- every new accepted strategy trigger (day and swing) goes into the immutable signal log;
-- the default-timeframe analysis feeds "Recently detected setups".
+A **server-side** engine that runs after every scanner snapshot. The scanner runs on the
+backend's scheduler, so alerts are created whether or not a dashboard is open. The engine
+diffs each snapshot against the state it saved after the previous scan, which is
+persisted in SQLite. Every alert comes from scanner rows, i.e. from the strategy and
+planning engines. Nothing is recomputed or invented.
 
-Re-scans of unchanged data don't duplicate alerts. Turn on **Notify** in the Alerts panel
-to get browser notifications for actionable setups.
+| Type | When | Severity |
+| --- | --- | --- |
+| `approaching_support` / `approaching_resistance` | price moves within *proximity* (default 0.5 ATR) of, or inside, the nearest important S/R zone (key-level engine; EMAs/VWAP excluded) | info |
+| `breakout_confirmed` | a breakout strategy (ORB, swing breakout, consolidation breakout) turns TRIGGERED | actionable |
+| `retest_confirmed` | the breakout-retest strategy turns TRIGGERED (retest held, all conditions met) | actionable |
+| `setup_triggered` | any other setup turns TRIGGERED; the message shows the transition, e.g. `WATCHING -> TRIGGERED` | actionable |
+| `setup_invalidated` | a WATCHING or TRIGGERED setup becomes NO_TRADE: invalidation close, expiry or a failed check. A trade that resolved at its stop or target is reported as `stop_reached` / `target_reached` instead | warning |
+| `swing_candidate` | a swing setup becomes WATCHING/TRIGGERED with quality ≥ the minimum (default 70) | info |
+| `target_reached` / `stop_reached` | a trigger that was open reaches T1/T2 or its stop on a completed candle | info / warning |
+| `price_level` | price reaches a level you defined (one-shot, *Levels* tab) | info |
+| `data_stale` | a ticker's data becomes stale, invalid or unavailable | warning |
+
+Every alert carries:
+- ticker, trading mode, strategy, direction;
+- current price and the relevant key level;
+- setup status (and the previous one), entry trigger and entry, entry conditions with
+  pass/fail;
+- stop-loss, targets, risk/reward, quality and invalidation;
+- timestamp and the candle it is based on;
+- **data feed status**: feed, freshness, as-of time and reason.
+
+**Guarantees** (each one is tested in `tests/test_alerts.py`):
+- **No actionable alert from incomplete or stale data.**
+  - A ticker or mode whose data is stale, invalid or unavailable produces one
+    `data_stale` warning and nothing else.
+  - Its previous setup state is carried forward, so an outage can neither trigger nor
+    falsely "invalidate" a setup.
+  - An actionable alert also needs a fresh TRIGGERED row with price, entry, stop, T1 and
+    R:R all present. Otherwise it is held back, with the reason, and retried on the next
+    scan.
+- **No duplicates for the same setup and candle.**
+  - Each alert has a dedupe key (`type | setup lineage | trigger candle`, or `| candle`
+    for level, candidate and invalidation alerts).
+  - The key is `UNIQUE` in the `alert_events` table. A rescan, a restart, lost state or a
+    second scanner process cannot store the same alert twice.
+- **Cooldowns** apply per type and subject, and are configurable:
+  - defaults: approaching 60 min, invalidated 30 min, swing candidate 24 h, data stale
+    60 min, triggers/targets/stops 0;
+  - the same zone seen by day and swing analysis shares one cooldown.
+- A new trading day silently expires yesterday's intraday setups. They are not reported
+  as "invalidated".
+- **No orders are placed.** Alerts describe conditional plans; there is no brokerage
+  integration.
+
+**Preferences** (*Settings* tab, `GET/PUT /api/alerts/preferences`, stored in SQLite):
+- each type: on/off, browser notification, cooldown minutes;
+- modes (day/swing);
+- muted tickers;
+- proximity in ATRs;
+- swing-candidate minimum quality;
+- optional minimum quality and R:R for trigger alerts;
+- webhook types.
+
+Turning a type off still advances the engine state, so turning it back on doesn't replay
+old events.
+
+**Delivery:**
+- Alerts are stored in SQLite and listed in the Alerts panel (filters: actionable, levels,
+  warnings).
+- Click an alert for the full content, then **Open chart & analysis**.
+- **Browser notifications** (🔔, after you grant permission) fire for the types you
+  chose, while a dashboard tab is open. The choice is remembered.
+- With the dashboard closed, set `ALERT_WEBHOOK_URL` in `backend/.env` (Slack, Discord,
+  ntfy, Zapier or your own endpoint). Each alert is POSTed as JSON, and the delivery result
+  is stored with it. The URL is never logged or returned (only its host).
+- See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for running this reliably 24/7.
+
+The old setup-engine "FORMING/ACTIONABLE" alerts were removed. "Recently detected setups"
+and the immutable signal log (`/api/strategies/signals`) are still recorded.
 
 ## API
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/health` | data mode (`demo`/`alpaca`), feed, AI status, timeframes |
+| GET | `/api/health` | data mode (`demo`/`alpaca`), feed, AI status, timeframes, scanner + alert-engine heartbeat |
 | GET | `/api/market/status` | session phase, holiday/early close, next open/close, calendar source |
 | GET | `/api/watchlist` | quotes: price, change, volume, last-trade time, latency |
 | GET | `/api/bars/{symbol}?timeframe=5Min&session=regular\|extended&limit=300` | candles + completion + data status + quality report |
@@ -846,4 +920,7 @@ to get browser notifications for actionable setups.
 | POST | `/api/scanner/run` · `/api/scan` | scan the watchlist now |
 | POST / DELETE | `/api/watchlist` (`{"symbol": "IWM"}`) · `/api/watchlist/{symbol}` | add / remove a ticker (validated, persisted) |
 | GET | `/api/setups/recent` | recently detected setups |
-| GET | `/api/alerts` / POST `/api/alerts/{id}/ack` | alerts |
+| GET | `/api/alerts[?limit=&unacknowledged=&ticker=&type=a,b&after_id=]` | alerts from the alert engine (newest first) + unread counts |
+| POST | `/api/alerts/{id}/ack` · `/api/alerts/ack-all` | mark read |
+| GET / PUT | `/api/alerts/preferences` (POST `/reset`) | alert types, preferences, webhook status |
+| GET / POST / DELETE | `/api/alerts/levels` (`{"ticker","price","condition?","note?"}`) · `/api/alerts/levels/{id}` | one-shot price-level alerts |

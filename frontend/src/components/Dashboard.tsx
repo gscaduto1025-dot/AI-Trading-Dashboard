@@ -43,6 +43,7 @@ import { DataUnavailable, DemoTag, Panel } from "./ui";
 
 const ALL_TIMEFRAMES = ["1Min", "5Min", "15Min", "30Min", "1Hour", "4Hour", "1Day", "1Week"];
 const FALLBACK_DEFAULT: Record<Mode, string> = { day: "5Min", swing: "1Day" };
+const NOTIFY_KEY = "tradescope.alerts.notify";
 const DEFAULT_SYMBOLS = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"];
 const TF_LABEL: Record<string, string> = {
   "1Min": "1m",
@@ -118,6 +119,7 @@ export default function Dashboard() {
   const [swingSort, setSwingSort] = useState<SwingSortKey>("quality");
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  const [unread, setUnread] = useState(0);
   const [view, setView] = useState<"dashboard" | "scanner">("dashboard");
   const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
@@ -316,17 +318,23 @@ export default function Dashboard() {
   const loadFeeds = useCallback(() => {
     api.recentSetups(30).then((r) => setSetups(r.setups)).catch(() => {});
     api
-      .alerts(50)
+      .alerts(100)
       .then((r) => {
         setAlerts(r.alerts);
+        setUnread(r.counts.unread);
         const newest = r.alerts[0]?.id ?? 0;
+        // Browser notifications for alerts created since the last poll, for the types chosen
+        // in alert settings (`browser`). Alerts are created server-side whether or not this
+        // page is open; the webhook covers delivery while it is closed.
         if (seenAlerts.current !== null && newest > seenAlerts.current && notify) {
           r.alerts
-            .filter((a) => a.id > (seenAlerts.current ?? 0) && a.status === "ACTIONABLE")
+            .filter((a) => a.id > (seenAlerts.current ?? 0) && a.browser)
+            .reverse()
             .forEach((a) => {
               try {
-                new Notification(`TradeScope: ${a.symbol} actionable${a.is_demo ? " (DEMO)" : ""}`, {
-                  body: a.message,
+                new Notification(`TradeScope: ${a.title}`, {
+                  body: `${a.message}\nData: ${a.feed_status.feed ?? "?"} (${a.feed_status.freshness ?? "?"})`,
+                  tag: `tradescope-alert-${a.id}`,
                 });
               } catch {
                 /* notifications unsupported */
@@ -339,6 +347,21 @@ export default function Dashboard() {
   }, [notify]);
 
   usePolling(loadFeeds, 20_000, [loadFeeds]);
+
+  useEffect(() => {
+    // Restore the browser-notification choice (client-only APIs; permission must still hold).
+    let on = false;
+    try {
+      on =
+        localStorage.getItem(NOTIFY_KEY) === "1" &&
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted";
+    } catch {
+      /* storage unavailable */
+    }
+    const t = setTimeout(() => setNotify(on), 0);
+    return () => clearTimeout(t);
+  }, []);
 
   const changeMode = (m: Mode) => {
     if (m !== mode) setSelectedSetupId(null);
@@ -372,11 +395,34 @@ export default function Dashboard() {
     loadFeeds();
   };
 
+  const ackAll = async () => {
+    await api.ackAllAlerts().catch(() => {});
+    loadFeeds();
+  };
+
+  const openAlert = (a: Alert) => {
+    setView("dashboard");
+    setSymbol(a.ticker);
+    if (a.mode) setMode(a.mode);
+    if (a.mode && a.timeframe && (health?.timeframes[a.mode] ?? []).includes(a.timeframe)) setTimeframe(a.timeframe);
+    else if (a.mode) setTimeframe((health?.default_timeframes ?? FALLBACK_DEFAULT)[a.mode]);
+    setSession("regular");
+    setSelectedSetupId(a.setup_id);
+  };
+
   const toggleNotify = async () => {
-    if (notify) return setNotify(false);
+    const save = (on: boolean) => {
+      setNotify(on);
+      try {
+        localStorage.setItem(NOTIFY_KEY, on ? "1" : "0");
+      } catch {
+        /* storage unavailable */
+      }
+    };
+    if (notify) return save(false);
     if (typeof Notification === "undefined") return;
     const perm = Notification.permission === "granted" ? "granted" : await Notification.requestPermission();
-    setNotify(perm === "granted");
+    save(perm === "granted");
   };
 
   const quote = quotes?.find((q) => q.symbol === symbol);
@@ -691,7 +737,16 @@ export default function Dashboard() {
           <RecentSetups setups={setups} onSelect={selectSetup} />
         </div>
         <div className="max-h-[420px] md:h-[380px] md:max-h-none xl:col-span-3">
-          <AlertsPanel alerts={alerts} onAck={ack} notifyEnabled={notify} onToggleNotify={toggleNotify} />
+          <AlertsPanel
+            alerts={alerts}
+            unread={unread}
+            onAck={ack}
+            onAckAll={ackAll}
+            onOpen={openAlert}
+            notifyEnabled={notify}
+            onToggleNotify={toggleNotify}
+            watchlist={health?.watchlist ?? []}
+          />
         </div>
       </section>
       </>

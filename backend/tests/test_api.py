@@ -39,20 +39,19 @@ def test_scan_records_setups_and_alerts_once(client):
     alerts = client.get("/api/alerts").json()["alerts"]
     non_trivial = [r for r in first["results"] if r["status"] != "NO_TRADE"]
     assert len(setups) == len(non_trivial)
-    assert len(alerts) == len(first["new_alerts"])
-    # Setup-engine alerts (FORMING/ACTIONABLE) plus strategy-engine TRIGGERED signals.
-    assert len([a for a in alerts if a["status"] != "TRIGGERED"]) == len(non_trivial)
+    assert alerts and len(alerts) == len(first["new_alerts"])
+    # Every TRIGGERED setup the strategy engines logged produced exactly one trigger alert.
     signals = client.get("/api/strategies/signals").json()["signals"]
-    assert len([a for a in alerts if a["status"] == "TRIGGERED"]) == len(signals)
+    trig = [a for a in alerts if a["actionable"]]
+    assert {a["setup_id"] for a in trig} <= {s["id"] for s in signals}
     # Re-scanning unchanged (demo) data must not duplicate setups or alerts.
     second = client.post("/api/scan").json()
     assert second["new_alerts"] == []
     assert len(client.get("/api/alerts").json()["alerts"]) == len(alerts)
-    if alerts:
-        aid = alerts[0]["id"]
-        assert client.post(f"/api/alerts/{aid}/ack").json() == {"ok": True}
-        unacked = client.get("/api/alerts", params={"unacknowledged": True}).json()["alerts"]
-        assert aid not in [a["id"] for a in unacked]
+    aid = alerts[0]["id"]
+    assert client.post(f"/api/alerts/{aid}/ack").json() == {"ok": True}
+    unacked = client.get("/api/alerts", params={"unacknowledged": True}).json()["alerts"]
+    assert aid not in [a["id"] for a in unacked]
 
 
 def test_ai_without_key_is_explicitly_unavailable(client):

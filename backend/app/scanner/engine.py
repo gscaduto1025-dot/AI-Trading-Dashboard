@@ -2,7 +2,8 @@
 
 Every row is a setup produced by the day-trading or swing-trading strategy engine and
 planned by the trade-planning engine; the scanner only collects, annotates and ranks
-them. It never invents a setup, a price or a status, and it never calls Claude.
+them. It never invents a setup, a price or a status, and it never calls Claude. After a
+scan, the alert engine (app.alerts) diffs the snapshot against its persisted state.
 
 Scheduling: `due()` compares an "eligible candle" signature - the watchlist, the number
 of completed 5-minute candles in the current regular session and the last completed daily
@@ -60,6 +61,9 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
     if status == "NO_TRADE":
         issues = [c["name"] + ": " + c["detail"] for c in plan.get("checks", [])
                   if c["passed"] is False] or list(s.get("reasons", []))[:2]
+    last = s.get("last_trigger") or {}  # swing: a trigger that already resolved
+    trig_time = s.get("trigger_time") or last.get("time")
+    outcome = s.get("outcome") or last.get("outcome")
     if not fresh:
         issues.insert(0, f"Data {data.get('freshness')}: {data.get('reason') or 'not usable'}")
     return {
@@ -79,6 +83,16 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
         "distance_to_trigger_pct": (round(100 * sgn * (trig - price) / price, 2)
                                     if trig is not None and price else None),
         "last_updated": s.get("evaluated_at"),
+        "session_date": s.get("session_date"),
+        "key_level": next(({"label": l.get("label"), "low": l.get("low"), "high": l.get("high"),
+                            "timeframe": l.get("timeframe")}
+                           for l in s.get("supporting_levels") or []), None),
+        "trigger_time": trig_time,
+        "outcome": (outcome or {}).get("state"),
+        "outcome_time": (outcome or {}).get("time"),
+        "entry_conditions": [{"name": c["name"], "passed": c.get("passed"),
+                              "detail": c.get("detail")} for c in plan.get("confirmation", [])],
+        "invalidation": list(plan.get("invalidation") or s.get("invalidation") or []),
         "data_freshness": data.get("freshness"),
         "data_as_of": data.get("as_of"),
         "last_candle": data.get("last_candle"),
@@ -139,8 +153,11 @@ def _proximity(analysis: dict) -> dict:
         if l.get("category") not in SR_CATEGORIES:
             continue  # moving averages / VWAP are not support-resistance zones here
         inside = l["low"] <= price <= l["high"]
-        if inside:
-            side, edge = ("support" if l.get("side") == "support" else "resistance"), price
+        if inside:  # price inside a zone: classify it by the zone's role
+            role = l.get("type") or ""
+            side = ("resistance" if role == "RESISTANCE_ZONE" or "resistance" in l["label"].lower()
+                    else "support")
+            edge = price
         elif l["high"] < price:
             side, edge = "support", l["high"]
         else:
@@ -213,6 +230,15 @@ class OpportunityScanner:
             self.snapshot["signature"] = list(sig)
             self._signature = sig
             self.scan_count += 1
+            alerts = getattr(self.service, "alerts", None)
+            self.snapshot["new_alerts"] = []
+            if alerts is not None:
+                try:  # a failure here must never lose the scan itself
+                    self.snapshot["new_alerts"] = alerts.process(self.snapshot)
+                except Exception as exc:
+                    log.exception("Alert engine failed")
+                    self.snapshot["errors"].append({"symbol": "*", "mode": "alerts",
+                                                    "code": "ALERT_ENGINE", "error": str(exc)})
             return self.snapshot
 
     # ---------------------------------------------------------------------- the scan
@@ -222,8 +248,8 @@ class OpportunityScanner:
         market = svc.market
         started_at = datetime.now(NY).isoformat(timespec="seconds")
         errors: list[dict] = []
-        alerts: list[dict] = []
         results: list[dict] = []
+        states: list[dict] = []
         try:
             quotes = {q["symbol"]: q for q in market.get_quotes()}
         except DataError as exc:
@@ -232,9 +258,7 @@ class OpportunityScanner:
         engine: dict[str, dict] = {}
         for mode, call in (("day", svc.strategy_setups), ("swing", svc.swing_setups)):
             try:
-                res = call()  # records new triggers in the signal log (alerts)
-                engine[mode] = res
-                alerts += res["new_alerts"]
+                engine[mode] = call()  # also appends new triggers to the signal log
             except DataError as exc:
                 engine[mode] = {"setups": [], "symbols": {}}
                 errors.append({"symbol": "*", "mode": mode, "code": exc.code, "error": str(exc)})
@@ -262,9 +286,7 @@ class OpportunityScanner:
                     info["levels"][mode] = _proximity(analysis)
                     if info["price"] is None:
                         info["price"] = analysis["price"]
-                    alert = svc.db.record_setup(analysis, svc.is_demo)  # recent-setups feed
-                    if alert:
-                        alerts.append(alert)
+                    svc.db.record_setup(analysis, svc.is_demo)  # recent-setups feed
                     s = analysis["setup"]
                     results.append({"symbol": sym, "mode": mode, "timeframe": analysis["timeframe"],
                                     "status": s["status"], "title": s["title"],
@@ -274,9 +296,12 @@ class OpportunityScanner:
                 if state and state.get("status") == "unavailable":
                     info["flags"].append(f"{mode}: MARKET DATA UNAVAILABLE - {state.get('error')}")
                 for s in engine[mode]["setups"]:
-                    if s["ticker"] != sym or not include_row(s):
+                    if s["ticker"] != sym:
                         continue
                     row = setup_row(s, mode, info["price"], info["bias"].get(mode), data)
+                    states.append(row)  # every evaluated setup, for the alert engine
+                    if not include_row(s):
+                        continue
                     rows.append(row)
                     info["counts"][row["status"]] += 1
             info["flagged"] = bool(info["flags"])
@@ -289,6 +314,6 @@ class OpportunityScanner:
             "is_demo": svc.is_demo, "feed": market.feed_info(),
             "market_phase": market.market_status().get("phase"),
             "watchlist": list(market.symbols), "tickers": tickers, "rows": rows,
-            "errors": errors, "new_alerts": alerts, "results": results,
+            "errors": errors, "results": results, "setup_states": states,
             "strategies": sorted({r["strategy"] for r in rows}),
         }

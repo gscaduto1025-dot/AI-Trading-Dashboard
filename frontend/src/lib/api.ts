@@ -1,6 +1,9 @@
 import type {
   AIResponse,
   Alert,
+  AlertPrefs,
+  AlertPrefsResponse,
+  AlertsResponse,
   Analysis,
   CandleResponse,
   DataStatus,
@@ -14,6 +17,7 @@ import type {
   SessionKind,
   StrategyEvaluation,
   PlansResponse,
+  PriceLevel,
   ScannerFilters,
   ScannerSnapshot,
   SwingEvaluation,
@@ -110,6 +114,23 @@ export const api = {
     request<AIResponse>(`/api/ai/${symbol}?${q({ mode, setup_id: setupId ?? undefined, refresh })}`, { method: "POST" }),
   scan: () => request<{ scanned_at: number; new_alerts: Alert[] }>("/api/scan", { method: "POST" }),
   recentSetups: (limit = 25) => request<{ setups: RecordedSetup[] }>(`/api/setups/recent?${q({ limit })}`),
-  alerts: (limit = 50) => request<{ alerts: Alert[] }>(`/api/alerts?${q({ limit })}`),
+  alerts: (limit = 50) => request<AlertsResponse>(`/api/alerts?${q({ limit })}`),
   ackAlert: (id: number) => request<{ ok: boolean }>(`/api/alerts/${id}/ack`, { method: "POST" }),
+  ackAllAlerts: () => request<{ ok: boolean; acknowledged: number }>("/api/alerts/ack-all", { method: "POST" }),
+  alertPrefs: () => request<AlertPrefsResponse>("/api/alerts/preferences"),
+  saveAlertPrefs: (p: Partial<AlertPrefs>) =>
+    request<AlertPrefsResponse>("/api/alerts/preferences", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(p),
+    }),
+  resetAlertPrefs: () => request<AlertPrefsResponse>("/api/alerts/preferences/reset", { method: "POST" }),
+  priceLevels: () => request<{ levels: PriceLevel[] }>("/api/alerts/levels"),
+  addPriceLevel: (body: { ticker: string; price: number; condition?: "above" | "below"; note?: string }) =>
+    request<{ level: PriceLevel }>("/api/alerts/levels", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  deletePriceLevel: (id: number) => request<{ ok: boolean }>(`/api/alerts/levels/${id}`, { method: "DELETE" }),
 };

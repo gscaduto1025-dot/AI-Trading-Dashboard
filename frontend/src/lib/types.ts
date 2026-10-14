@@ -83,6 +83,15 @@ export interface Health {
   default_timeframes: Record<Mode, string>;
   last_scan: number | null;
   scan_interval_seconds: number;
+  scanner?: { scan_count: number; due: boolean; last_error: string | null; last_finished_at: string | null };
+  alerts?: {
+    total: number;
+    unread: number;
+    unread_actionable: number;
+    latest_id: number | null;
+    webhook: boolean;
+    last_run: { at: number; scan_id: number | null; created: number; suppressed: number } | null;
+  };
   live_trading: boolean;
   disclaimer: string;
 }
@@ -276,18 +285,124 @@ export interface RecordedSetup {
   detected_at: number;
 }
 
+export type AlertType =
+  | "approaching_support"
+  | "approaching_resistance"
+  | "breakout_confirmed"
+  | "retest_confirmed"
+  | "setup_triggered"
+  | "setup_invalidated"
+  | "swing_candidate"
+  | "target_reached"
+  | "stop_reached"
+  | "price_level"
+  | "data_stale";
+export type AlertSeverity = "actionable" | "info" | "warning";
+
+/** One alert from the server-side alert engine (backend app/alerts). */
 export interface Alert {
   id: number;
-  symbol: string;
-  mode: Mode;
-  timeframe: string;
-  status: SetupStatus;
-  direction: "long" | "short" | null;
+  type: AlertType;
+  label: string;
+  severity: AlertSeverity;
+  /** True only for confirmed, fresh, complete TRIGGERED plans. */
+  actionable: boolean;
+  ticker: string;
+  mode: Mode | null;
+  strategy: string | null;
+  setup: string | null;
+  timeframe: string | null;
+  direction: "LONG" | "SHORT" | null;
+  price: number | null;
+  key_level: {
+    label: string;
+    low: number | null;
+    high: number | null;
+    timeframe: string | null;
+    strength?: number | null;
+    distance_atr?: number | null;
+    inside?: boolean;
+  } | null;
+  status: string | null;
+  previous_status: string | null;
+  entry_trigger: number | null;
+  entry: number | null;
+  entry_conditions: { name: string; passed: boolean | null; detail: string | null }[];
+  invalidation: string[];
+  stop: number | null;
+  targets: number[];
+  risk_reward: number | null;
+  quality: number | null;
+  setup_id: string | null;
+  trigger_time: number | null;
+  candle_time: string | null;
+  feed_status: {
+    source: string | null;
+    feed: string | null;
+    latency: string | null;
+    delay_seconds: number | null;
+    freshness: string | null;
+    reason: string | null;
+    as_of: string | null;
+    last_candle: string | null;
+    timeframe: string | null;
+  };
+  is_demo: boolean;
+  scan_id: number | null;
+  timestamp: string;
   title: string;
   message: string;
-  is_demo: boolean;
-  created_at: number;
+  /** Server preference: show this alert as a browser notification. */
+  browser: boolean;
   acknowledged: boolean;
+  created_at: number;
+  delivery: string | null;
+}
+
+export interface AlertsResponse {
+  alerts: Alert[];
+  counts: { total: number; unread: number; unread_actionable: number; latest_id: number | null };
+  last_run: { at: number; scan_id: number | null; created: number; suppressed: unknown[] } | null;
+  is_demo: boolean;
+}
+
+export interface AlertPrefs {
+  enabled: Record<AlertType, boolean>;
+  cooldown_minutes: Record<AlertType, number>;
+  modes: Mode[];
+  muted_tickers: string[];
+  proximity_atr: number;
+  swing_candidate_min_quality: number;
+  min_quality: number;
+  min_risk_reward: number | null;
+  browser_types: AlertType[];
+  webhook_types: AlertType[];
+}
+
+export interface AlertTypeMeta {
+  label: string;
+  severity: AlertSeverity;
+  actionable: boolean;
+  cooldown_minutes: number;
+  description: string;
+}
+
+export interface AlertPrefsResponse {
+  preferences: AlertPrefs;
+  types: Record<AlertType, AlertTypeMeta>;
+  webhook: { configured: boolean; host: string | null };
+}
+
+export interface PriceLevel {
+  id: number;
+  ticker: string;
+  price: number;
+  condition: "above" | "below";
+  note: string;
+  created_at: number;
+  triggered_at: number | null;
+  triggered_price: number | null;
+  active: boolean;
 }
 
 export type LevelCategory = "reference" | "zone" | "swing" | "indicator" | "liquidity" | "breakout";

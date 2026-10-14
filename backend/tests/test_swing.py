@@ -412,5 +412,5 @@ def test_swing_replay_is_point_in_time(client):
     r = client.get("/api/swing/setups", params={"symbol": "AAPL", "as_of": "2026-02-20T17:00"})
     assert r.status_code == 200
     body = r.json()
-    assert body["replay"] is True and body["new_alerts"] == []
+    assert body["replay"] is True and body["new_signals"] == []
     assert all(s["last_candle"] <= "2026-02-20" for s in body["setups"])
