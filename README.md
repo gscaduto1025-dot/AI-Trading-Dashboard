@@ -21,6 +21,11 @@ TradeScope AI is a stock and options **analysis** platform for day and swing tra
 > backtests. Option prices and Greeks are never simulated; options show **OPTIONS DATA
 > UNAVAILABLE** in demo mode.
 
+> **Open the dashboard:** run it on your own computer with `./scripts/start.sh` and open
+> <http://localhost:3000>. Step-by-step instructions for macOS, Linux and Windows, phone
+> access, and why `localhost` does not reach a Claude Code cloud session are in
+> [docs/OPEN_DASHBOARD.md](docs/OPEN_DASHBOARD.md).
+
 ## Contents
 
 1. [Setup](#setup)
@@ -128,6 +133,7 @@ Copy the matching `*.example.json` file to start.
 | What | Command |
 | --- | --- |
 | Development (both servers, hot reload) | `./scripts/dev.sh` |
+| Everyday use (production build; `--lan` for phone access on your Wi-Fi) | `./scripts/start.sh` |
 | Backend only | `cd backend && .venv/bin/uvicorn app.main:app --reload --port 8000` |
 | Frontend only | `cd frontend && npm run dev` (proxies `/api` to `BACKEND_URL`, default `http://127.0.0.1:8000`) |
 | Production backend | `cd backend && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1` |

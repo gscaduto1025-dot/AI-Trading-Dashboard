@@ -151,7 +151,8 @@ export default function Dashboard() {
   const effectiveSession: SessionKind = intraday ? session : "regular";
   const viewKey = `${symbol}|${mode}|${timeframe}|${effectiveSession}`;
   const loading = loadedKey !== viewKey;
-  const isDemo = health?.is_demo ?? true;
+  // Demo only when the backend says so; until /api/health answers the feed is unknown.
+  const isDemo = health?.is_demo === true;
   const timeframes = health?.all_timeframes.map((t) => t.key) ?? ALL_TIMEFRAMES;
   const suggested = new Set(health?.timeframes[mode] ?? []);
   const phase = market?.phase;
@@ -552,7 +553,9 @@ export default function Dashboard() {
             />
             {backendError
               ? "Backend offline"
-              : isDemo
+              : !health
+                ? "Connecting…"
+                : isDemo
                 ? "Demo feed"
                 : `Alpaca ${feed?.label ?? ""}${dataDown ? " · unavailable" : ""}`}
           </span>
