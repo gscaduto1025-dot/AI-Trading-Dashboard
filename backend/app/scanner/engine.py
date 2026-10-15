@@ -19,10 +19,11 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from ..data.base import DEFAULT_TIMEFRAME, DataError
 from ..market.calendar import NY
+from ..market.service import COMPLETION_GRACE_SECONDS
 from ..strategies.entry import (CURRENTLY_ACTIONABLE, HISTORICALLY_TRIGGERED,  # noqa: F401
                                 entry_checks, entry_env_at)
 from ..strategies.volume import volume_confirmation
@@ -292,7 +293,11 @@ class OpportunityScanner:
 
     def signature(self) -> tuple:
         market = self.service.market
-        cut = market.cutoff()
+        # A candle counts once it is final (end + completion grace), so a scan that starts
+        # right after a close never evaluates without that candle and then waits for the
+        # next one. At 16:00:03 the 15:55 candle is not final yet; without this, the
+        # session's last candle was never scanned (the signature was already "closed").
+        cut = market.cutoff() - timedelta(seconds=COMPLETION_GRACE_SECONDS + 1)
         cal = market.calendar
         sess = cal.last_session_started(cut, "regular")
         if sess.open <= cut < sess.close:

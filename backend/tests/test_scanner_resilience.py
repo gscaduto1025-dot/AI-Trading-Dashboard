@@ -32,8 +32,8 @@ class Clock:
         self.mono += s
 
 
-def make(tmp_path):
-    clock = Clock(datetime(2026, 3, 10, 10, 31, tzinfo=NY))
+def make(tmp_path, start=datetime(2026, 3, 10, 10, 31, tzinfo=NY)):
+    clock = Clock(start)
     fake = FakeAlpaca(clock.now)
     client = AlpacaClient("PKTESTKEY", "SECRETVALUE", transport=fake.transport(),
                           sleep=clock.sleep, clock=lambda: clock.mono,
@@ -48,7 +48,7 @@ def make(tmp_path):
                            watchlist=SYMBOLS),
                   market=market, db=Database(tmp_path / "t.db"), with_universe=False)
 
-    def advance(minutes: int) -> None:
+    def advance(minutes: float) -> None:
         clock.now += timedelta(minutes=minutes)
         fake.now = clock.now
 
@@ -123,3 +123,22 @@ def test_background_scan_loop_survives_exceptions(tmp_path, monkeypatch):
         assert calls["n"] >= 4, "the loop stopped after an exception"
         assert svc.scanner.last_error is None
         assert client.get("/api/health").status_code == 200
+
+
+def test_the_sessions_last_candle_is_scanned_after_the_close(tmp_path):
+    """Phase 2 live finding: the 16:00:03 scan ran before the 15:55 candle was final (5 s
+    completion grace), and the signature was already "closed", so the last candle of the
+    session was never scanned. The signature now advances only once a candle is final."""
+    fake, svc, advance = make(tmp_path, datetime(2026, 3, 10, 15, 57, tzinfo=NY))
+    sc = svc.scanner
+    sc.run(trigger="scheduled")
+    advance(3 + 3 / 60)  # 16:00:03, inside the completion grace
+    assert not sc.due()
+    advance(4 / 60)  # 16:00:07
+    assert sc.due()
+    snap = sc.run(trigger="scheduled")
+    assert snap["signature"][2] == "closed"
+    assert {t["data"]["day"]["last_candle"] for t in snap["tickers"]} == {
+        "2026-03-10T15:55:00-04:00"}
+    advance(60)
+    assert not sc.due()  # nothing further after the close
