@@ -1316,6 +1316,9 @@ export interface JournalPnl {
   r_multiple: number | null;
   opened_at: number | null;
   closed_at: number | null;
+  multiplier?: number;
+  result?: "win" | "loss" | "breakeven" | null;
+  duration_seconds?: number | null;
 }
 
 export interface JournalTrade {
@@ -1327,6 +1330,15 @@ export interface JournalTrade {
   setup_id: string | null;
   planned_stop: number | null;
   planned_target: number | null;
+  planned_target2?: number | null;
+  mode?: Mode | null;
+  asset_type?: "stock" | "option";
+  option_symbol?: string | null;
+  multiplier?: number;
+  quality?: number | null;
+  evidence_status?: ValidationStatus | null;
+  evidence_label?: string | null;
+  trade_date?: string | null;
   notes: string;
   fills: JournalFill[];
   pnl: JournalPnl;
@@ -1353,4 +1365,141 @@ export interface JournalResponse {
   };
   simulated: false;
   order_execution: false;
+}
+
+
+// ------------------------------------------------------------ saved setups / performance
+
+export interface SavedSetup {
+  id: number;
+  setup_id: string;
+  source: "watchlist" | "universe";
+  ticker: string;
+  mode: Mode;
+  strategy: string;
+  direction: "LONG" | "SHORT";
+  timeframe: string;
+  status_at_save: string;
+  note: string;
+  saved_at: number;
+  payload: Partial<ScannerRow>;
+}
+
+export interface PerfGroup {
+  key: string;
+  trades: number;
+  net_pnl: number;
+  win_rate: number | null;
+  avg_r: number | null;
+  profit_factor: number | null;
+  anecdotal: boolean;
+}
+
+export interface Performance {
+  account: JournalAccount;
+  filters: Record<string, string>;
+  summary: JournalResponse["stats"] & {
+    total_trades: number;
+    gross_pnl: number;
+    max_drawdown: number;
+    breakeven: number;
+    avg_duration_seconds: number | null;
+    open_realized_partials: number;
+  };
+  best_strategy: PerfGroup | null;
+  worst_strategy: PerfGroup | null;
+  strategy_note: string | null;
+  by_strategy: PerfGroup[];
+  by_mode: PerfGroup[];
+  by_ticker: PerfGroup[];
+  by_asset_type: PerfGroup[];
+  monthly: { month: string; net_pnl: number }[];
+  cumulative: { time: number; date: string; ticker: string; net: number; cumulative: number }[];
+  open_trades: number;
+  simulated: boolean;
+  note: string;
+}
+
+// -------------------------------------------------------------------- universe scanner
+
+export interface UniverseRun {
+  id: number;
+  started_at: number;
+  finished_at: number | null;
+  heartbeat: number;
+  status: "running" | "completed" | "interrupted" | "failed";
+  trigger: string;
+  total: number;
+  scanned: number;
+  failed: number;
+  setups: number;
+  remaining: number;
+  stale: boolean;
+  error: string | null;
+  requests: number | null;
+}
+
+export interface UniverseStatus {
+  universe: { built_at: string; source: string; size: number; config: Record<string, unknown>; stats: Record<string, unknown> } | null;
+  running: UniverseRun | null;
+  last_completed: UniverseRun | null;
+  recent_runs: UniverseRun[];
+  schedule: { interval_seconds: number; rebuild_hours: number; enabled: boolean };
+  last_error: string | null;
+  coverage_note: string;
+  is_demo: boolean;
+}
+
+export interface UniverseTickerMode {
+  status: "ok" | "DATA_UNAVAILABLE";
+  scanned_at: number;
+  bias: string | null;
+  levels: ScannerTicker["levels"]["day"] | null;
+  key_levels: { label: string; type: string; timeframe: string | null; low: number; high: number; side: string | null; strength: number | null }[] | null;
+  indicators: Record<string, number | null> | null;
+  error: string | null;
+}
+
+export interface UniverseSetups {
+  rows: (ScannerRow & { scanned_at?: number; first_seen?: number | null; last_seen?: number | null })[];
+  total_rows: number;
+  unavailable: { ticker: string; mode: Mode; status: "DATA_UNAVAILABLE"; error: string | null; scanned_at: number }[];
+  tickers: { ticker: string; price: number | null; liquidity: { adv: number } | null; modes: Partial<Record<Mode, UniverseTickerMode>> }[];
+  universe_size: number;
+  symbols_with_results: number;
+  strategies: string[];
+  is_demo: boolean;
+}
+
+export interface RulesExplanation {
+  source: string;
+  status: StrategyStatus;
+  symbol: string;
+  mode: Mode;
+  data_timestamp: string;
+  data_source: string;
+  evidence_label: string;
+  evidence_status: ValidationStatus;
+  detected: string[];
+  why_it_qualifies: string[];
+  market_context: string[];
+  key_levels: string[];
+  confirmation_required: string[];
+  invalidation: string[];
+  trade_plan: string[];
+  risk_reward: string[];
+  status_reason: string[];
+  evidence: string[];
+}
+
+export interface RulesExplanationResponse {
+  symbol: string;
+  mode: Mode;
+  setup_id: string | null;
+  status: StrategyStatus;
+  facts: AIFacts | null;
+  explanation: RulesExplanation | null;
+  ai: false;
+  reason?: string;
+  is_demo: boolean;
 }

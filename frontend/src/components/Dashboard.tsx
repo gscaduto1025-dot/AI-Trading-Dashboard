@@ -36,6 +36,8 @@ import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
 import BacktestView from "./BacktestView";
 import ResearchView from "./ResearchView";
+import PerformanceView from "./PerformanceView";
+import UniverseView from "./UniverseView";
 import TradeLogView from "./TradeLogView";
 import OptionsView from "./OptionsView";
 import ScannerView from "./ScannerView";
@@ -124,7 +126,7 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [unread, setUnread] = useState(0);
-  const [view, setView] = useState<"dashboard" | "scanner" | "options" | "backtest" | "journal" | "research">("dashboard");
+  const [view, setView] = useState<"dashboard" | "scanner" | "market" | "options" | "backtest" | "journal" | "performance" | "research">("dashboard");
   const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
@@ -511,7 +513,7 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" role="tablist" aria-label="View">
-            {(["dashboard", "scanner", "options", "backtest", "journal", "research"] as const).map((v) => (
+            {(["dashboard", "scanner", "market", "options", "backtest", "journal", "performance", "research"] as const).map((v) => (
               <button
                 key={v}
                 role="tab"
@@ -525,6 +527,10 @@ export default function Dashboard() {
                   ? "Chart & analysis"
                   : v === "scanner"
                     ? "Opportunity scanner"
+                    : v === "market"
+                      ? "Market scanner"
+                      : v === "performance"
+                        ? "Performance"
                     : v === "options"
                       ? "Options"
                       : v === "backtest"
@@ -568,6 +574,10 @@ export default function Dashboard() {
       {/* Main grid */}
       {view === "research" ? (
         <ResearchView />
+      ) : view === "market" ? (
+        <UniverseView onWatchlistChanged={() => setWlVersion((v) => v + 1)} />
+      ) : view === "performance" ? (
+        <PerformanceView />
       ) : view === "journal" ? (
         <TradeLogView />
       ) : view === "backtest" ? (

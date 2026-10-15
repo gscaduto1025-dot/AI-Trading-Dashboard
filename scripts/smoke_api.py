@@ -83,6 +83,41 @@ def scanner():
     return f"{len(j['tickers'])} tickers, {j['total_rows']} rows"
 
 
+def universe_scanner():
+    import time as _t
+    call("POST", "/api/universe/run")
+    deadline = _t.monotonic() + 900
+    while _t.monotonic() < deadline:
+        st = call("GET", "/api/universe/status")
+        if st["last_completed"] or (st["recent_runs"] and st["recent_runs"][0]["status"]
+                                    in ("failed", "interrupted")):
+            break
+        _t.sleep(3)
+    run = st["last_completed"]
+    assert run, f"no completed universe run: {st['recent_runs'][:1]} {st['last_error']}"
+    res = call("GET", "/api/universe/setups")
+    assert res["universe_size"] == run["total"]
+    if res["rows"]:
+        r = res["rows"][0]
+        ex = call("GET", f"/api/universe/explain/{r['ticker']}?mode={r['mode']}&setup_id={r['id']}")
+        assert ex["ai"] is False and ex["explanation"]["status"] == r["status"]
+    return (f"{run['scanned']}/{run['total']} stocks, {run['failed']} failed, "
+            f"{res['total_rows']} setups, {len(res['unavailable'])} DATA_UNAVAILABLE")
+
+
+def journal_and_performance():
+    t = call("POST", "/api/journal/paper/trades", {
+        "ticker": "SPY", "direction": "LONG", "mode": "swing", "planned_stop": 90,
+        "fills": [{"side": "BUY", "quantity": 1, "price": 100, "executed_at": 1773000000}]})
+    call("POST", f"/api/journal/paper/trades/{t['id']}/close",
+         {"price": 105, "executed_at": 1773003600})
+    p = call("GET", "/api/performance?account=paper")
+    assert p["summary"]["closed_trades"] >= 1 and p["simulated"] is True
+    ex = call("GET", "/api/explain/SPY?mode=swing")
+    assert ex["ai"] is False
+    return f"paper net {p['summary']['net_pnl']}, rules explanation {ex['status']}"
+
+
 def presets_and_research():
     p = call("POST", "/api/scanner/presets",
              {"name": "smoke preset", "filters": {"mode": "day", "validation": "INCONCLUSIVE"}})
@@ -150,7 +185,9 @@ def backtest():
 
 for name, fn in [("health", health), ("market data", market), ("analysis + levels", analysis),
                  ("strategies + plans", strategies), ("scanner", scanner),
-                 ("presets + research", presets_and_research), ("alerts", alerts),
+                 ("presets + research", presets_and_research),
+                 ("universe scanner", universe_scanner),
+                 ("journal + performance", journal_and_performance), ("alerts", alerts),
                  ("Claude explanation", ai), ("options", options), ("trade log", journal),
                  ("backtest", backtest)]:
     check(name, fn)

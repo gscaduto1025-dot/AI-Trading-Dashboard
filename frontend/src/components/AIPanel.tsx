@@ -4,7 +4,8 @@ import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "@/lib/api";
 import { STATUS_LABEL, fmtPrice, statusClasses } from "@/lib/format";
 import { VALIDATION_LABEL, validationClasses } from "@/lib/scannerFilters";
-import type { AIResponse, Mode } from "@/lib/types";
+import type { AIResponse, Mode, RulesExplanationResponse } from "@/lib/types";
+import RulesExplanation from "./RulesExplanation";
 import { DemoTag, Panel, Skeleton } from "./ui";
 
 const AUTO_KEY = "tradescope.ai.auto";
@@ -54,6 +55,27 @@ function Bullets({ items, dot }: { items: string[]; dot: string }) {
  * generates after a short pause when auto-explain is on. The status and every number come
  * from the deterministic engines; Claude only explains them.
  */
+/** Rules-based explanation for the selected setup (no AI; always available). */
+function RulesFallback({ symbol, mode, setupId }: { symbol: string; mode: Mode; setupId: string | null }) {
+  const k = `${symbol}|${mode}|${setupId}`;
+  const [res, setRes] = useState<{ k: string; data: RulesExplanationResponse | null; error: string | null } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .explain(symbol, mode, setupId)
+      .then((data) => alive && setRes({ k, data, error: null }))
+      .catch((e) => alive && setRes({ k, data: null, error: e instanceof Error ? e.message : String(e) }));
+    return () => {
+      alive = false;
+    };
+  }, [k, symbol, mode, setupId]);
+  const cur = res?.k === k ? res : null;
+  if (!cur) return <Skeleton className="h-20 w-full" />;
+  if (cur.error) return <p className="text-xs text-bear">{cur.error}</p>;
+  if (!cur.data?.explanation) return <p className="text-xs text-muted">{cur.data?.reason}</p>;
+  return <RulesExplanation x={cur.data.explanation} />;
+}
+
 export default function AIPanel({
   symbol,
   mode,
@@ -153,6 +175,19 @@ export default function AIPanel({
       </button>
     </span>
   );
+
+  if (!aiEnabled) {
+    // Claude is optional: without ANTHROPIC_API_KEY the panel shows the deterministic,
+    // rules-based explanation computed by the engines (no API call).
+    return (
+      <Panel title="Setup analysis · rules-based" right={isDemo ? <DemoTag /> : undefined} bodyClassName="overflow-y-auto">
+        <div className="space-y-2 p-3">
+          <RulesFallback symbol={symbol} mode={mode} setupId={setupId} />
+          <p className="text-[10px] text-faint">Claude AI is not activated (no ANTHROPIC_API_KEY); this text comes from the deterministic engines.</p>
+        </div>
+      </Panel>
+    );
+  }
 
   return (
     <Panel title="AI Analysis" right={right} bodyClassName="overflow-y-auto">

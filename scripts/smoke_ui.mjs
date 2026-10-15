@@ -62,6 +62,16 @@ await step("opportunity scanner", async () => {
   await page.getByText("Strategy evidence").first().waitFor({ timeout: 30000 });
   await page.screenshot({ path: path.join(outDir, "tradescope-scanner.png"), fullPage: true });
 });
+await step("market scanner tab", async () => {
+  await tab("Market scanner").click();
+  await page.getByText(/Eligible stocks/).first().waitFor({ timeout: 30000 });
+  await page.screenshot({ path: path.join(outDir, "tradescope-market.png"), fullPage: true });
+});
+await step("performance tab", async () => {
+  await tab("Performance").click();
+  await page.getByText(/Realized net P&L/).first().waitFor({ timeout: 30000 });
+  await page.screenshot({ path: path.join(outDir, "tradescope-performance.png"), fullPage: true });
+});
 await step("research tab", async () => {
   await tab("Research").click();
   await page.getByText(/Net expectancy per strategy/).first().waitFor({ timeout: 30000 });

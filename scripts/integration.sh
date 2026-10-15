@@ -31,6 +31,7 @@ wait_for() {  # url, seconds
 
 echo "==> Starting backend on :$BP (database $TMP/integration.db)"
 (cd "$ROOT/backend" && DATABASE_PATH="$TMP/integration.db" SCAN_INTERVAL_SECONDS=0 \
+  UNIVERSE_SCAN_INTERVAL_SECONDS=0 UNIVERSE_SIZE="${UNIVERSE_SIZE:-12}" RAW_CACHE_DIR="$TMP/cache" \
   exec .venv/bin/uvicorn app.main:app --port "$BP" >"$TMP/backend.log" 2>&1) &
 BPID=$!
 wait_for "http://127.0.0.1:$BP/api/health" 60

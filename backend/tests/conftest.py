@@ -10,6 +10,16 @@ from app.main import Service, create_app
 from app.market.calendar import NY
 from app.market.service import MarketDataService
 
+@pytest.fixture(autouse=True)
+def _isolated_raw_cache(tmp_path, monkeypatch):
+    """Tests never read or write the real raw-bar cache (fake 'alpaca' sources would
+    otherwise be persisted and restored into later runs)."""
+    monkeypatch.setenv("RAW_CACHE_DIR", str(tmp_path / "rawcache"))
+    monkeypatch.setenv("RAW_CACHE_PERSIST", "false")
+    monkeypatch.setenv("UNIVERSE_SCAN_INTERVAL_SECONDS", "0")
+    monkeypatch.setenv("UNIVERSE_RETRY_PAUSE_SECONDS", "0")
+
+
 # Demo data ends at the last completed session before this instant (Tue 2026-03-10 close).
 FIXED_NOW = datetime(2026, 3, 10, 18, 0, tzinfo=NY)
 WATCHLIST = ["SPY", "QQQ", "NVDA", "TSLA", "AAPL", "AMD", "MSFT", "META", "AMZN"]

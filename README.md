@@ -180,6 +180,27 @@ Every feature is a tab or panel of the dashboard, backed by the API.
     conditions met now, or triggered earlier), evidence status, volume verification,
     key-level distance (ATR), minimum R:R, setup quality and liquidity (consolidated $ ADV).
   - **Saved presets:** stored server-side, overwritten by name.
+- **Market scanner** (Market scanner tab, `app/universe`, [docs/SCANNER.md](docs/SCANNER.md)):
+  - scans a configurable universe of liquid US stocks: the top `UNIVERSE_SIZE`, default
+    100, by 20-session consolidated dollar volume, built from Alpaca data;
+  - runs server-side on a schedule, with the same frozen engines as the watchlist scanner;
+  - shows progress (eligible, scanned, remaining, failures, last completed scan), lists
+    DATA_UNAVAILABLE stocks, persists results and recovers after restarts;
+  - rules-based explanation per setup; save a setup or log a trade from it.
+- **Rules-based explanations** (`app/explain.py`, `GET /api/explain/{symbol}`): what was
+  detected, why it qualifies, key levels, required confirmation, invalidation,
+  entry/stop/targets, risk/reward, strategy evidence and why the status is
+  TRIGGERED/WATCHING/NO_TRADE. Deterministic, built from the engines' numbers, labelled
+  "not AI". Shown in the dashboard whenever Claude is not activated.
+- **Performance** tab (`GET /api/performance`), for actual OR paper trades (never
+  combined):
+  - net P&L, win rate, average win/loss, average R, profit factor, maximum drawdown;
+  - best/worst strategy, day vs swing, by ticker, stocks vs options, monthly P&L and a
+    cumulative P&L chart;
+  - filters: ticker, strategy, mode, instrument and date range.
+- **Warm restarts** (`app/rawcache.py`): downloaded candles are persisted and restored;
+  the frozen data rules decide refreshes. Measured restart 44.6 s / 101 requests, against
+  108.8 s / 254 cold.
 - **Research dashboard** (Research tab, `GET /api/research/validation`): the frozen
   validation per mode, strategy and timeframe, with trades, win rate, net R and its 95% CI,
   profit factor, drawdown, cost sensitivity and the pre-registered endpoints. Read-only.
@@ -226,7 +247,10 @@ Every feature is a tab or panel of the dashboard, backed by the API.
   - quality score vs outcome, and an evidence verdict that never claims profitability
     without sufficient evidence;
   - a trade inspector with charts.
-- **Trade log** (`app/journal`):
+- **Trade log** (`app/journal`) — also day/swing, stock/option (contract multiplier),
+  targets 1 and 2, setup quality, the strategy's evidence label at logging time, duration,
+  win/loss/breakeven, edit and one-click close; a separate **Saved setups** list holds
+  detected setups (never trades, excluded from P&L):
   - your **actual** and **paper** trades in separate accounts, entered manually;
   - multiple fills per trade (scaling in, partial exits), long and short;
   - fees, average-cost P&L and R multiples;

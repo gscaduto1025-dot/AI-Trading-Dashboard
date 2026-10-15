@@ -12,6 +12,8 @@ import sqlite3
 from datetime import datetime
 
 from ..data.base import DataError
+from ..market.calendar import NY
+from ..validation import for_strategy, registry
 from .pnl import Fill, JournalError, compute, stats
 
 ACCOUNTS = ("actual", "paper")
@@ -83,16 +85,21 @@ class TradeLog:
             return {}
 
     def _view(self, t: dict, marks: dict) -> dict:
+        mark = marks.get(t["ticker"]) if t.get("asset_type", "stock") == "stock" else None
         try:
-            pnl = compute(t["direction"], _fills(t["fills"]), t["planned_stop"],
-                          marks.get(t["ticker"]))
+            pnl = compute(t["direction"], _fills(t["fills"]), t["planned_stop"], mark,
+                          t.get("multiplier") or 1.0)
             problem = None
         except JournalError as exc:  # stored data no longer consistent (should not happen)
             pnl, problem = {"status": "invalid"}, str(exc)
         return t | {"pnl": pnl, "problem": problem,
-                    "mark_note": None if t["ticker"] in marks else
-                    "No live price (demo mode, stale feed or not on the watchlist): unrealized "
-                    "P&L is not shown."}
+                    "trade_date": (datetime.fromtimestamp(pnl["opened_at"], NY).date().isoformat()
+                                   if pnl.get("opened_at") else None),
+                    "mark_note": None if mark is not None else
+                    ("Options: no live option price is used; unrealized P&L is not shown."
+                     if t.get("asset_type") == "option" else
+                     "No live price (demo mode, stale feed or not on the watchlist): "
+                     "unrealized P&L is not shown.")}
 
     def list(self, account: str) -> dict:
         account = check_account(account)
@@ -111,7 +118,9 @@ class TradeLog:
         fills = [_fill(f) for f in body.get("fills") or []]
         if not fills:
             raise JournalError("record at least the opening fill")
-        compute(direction, _fills(fills), _num(body.get("planned_stop"), "planned_stop"))
+        asset_type, option_symbol, multiplier = _asset(body)
+        compute(direction, _fills(fills), _num(body.get("planned_stop"), "planned_stop"),
+                None, multiplier)
         keys = {(f["side"], f["quantity"], f["price"], f["executed_at"]) for f in fills}
         if len(keys) != len(fills):
             raise JournalError("the same fill appears twice")
@@ -120,7 +129,12 @@ class TradeLog:
                "setup_id": (str(body["setup_id"])[:40] if body.get("setup_id") else None),
                "planned_stop": _num(body.get("planned_stop"), "planned_stop"),
                "planned_target": _num(body.get("planned_target"), "planned_target"),
-               "notes": str(body.get("notes") or "")[:2000]}
+               "planned_target2": _num(body.get("planned_target2"), "planned_target2"),
+               "notes": str(body.get("notes") or "")[:2000],
+               "mode": _mode(body.get("mode")), "asset_type": asset_type,
+               "option_symbol": option_symbol, "multiplier": multiplier,
+               "quality": _quality(body.get("quality")),
+               **_evidence(body.get("strategy"))}
         tid = self.db.journal_insert_trade(account, row, fills)
         return self._view(self.db.journal_trade(account, tid), self._marks())
 
@@ -130,7 +144,8 @@ class TradeLog:
         if t is None:
             raise KeyError("trade not found")
         f = _fill(body)
-        compute(t["direction"], _fills(t["fills"] + [f]), t["planned_stop"])  # validates
+        compute(t["direction"], _fills(t["fills"] + [f]), t["planned_stop"], None,
+                t.get("multiplier") or 1.0)  # validates
         try:
             self.db.journal_add_fill(trade_id, f)
         except sqlite3.IntegrityError:
@@ -147,23 +162,91 @@ class TradeLog:
             raise KeyError("fill not found")
         if not rest:
             raise JournalError("a trade needs at least one fill; delete the trade instead")
-        compute(t["direction"], _fills(rest), t["planned_stop"])  # e.g. an exit left orphaned
+        compute(t["direction"], _fills(rest), t["planned_stop"], None,
+                t.get("multiplier") or 1.0)  # e.g. an exit left orphaned
         self.db.journal_delete_fill(account, trade_id, fill_id)
         return self._view(self.db.journal_trade(account, trade_id), self._marks())
 
     def update(self, account: str, trade_id: int, body: dict) -> dict:
         account = check_account(account)
         fields = {}
-        for k in ("planned_stop", "planned_target"):
+        for k in ("planned_stop", "planned_target", "planned_target2"):
             if k in body:
                 fields[k] = _num(body[k], k)
-        for k, n in (("notes", 2000), ("strategy", 60), ("setup_id", 40)):
+        for k, n in (("notes", 2000), ("strategy", 60), ("setup_id", 40),
+                     ("option_symbol", 40)):
             if k in body:
-                fields[k] = str(body[k] or "")[:n]
+                fields[k] = str(body[k] or "")[:n] or None
+        if "notes" in fields:
+            fields["notes"] = fields["notes"] or ""
+        if "mode" in body:
+            fields["mode"] = _mode(body["mode"])
+        if "quality" in body:
+            fields["quality"] = _quality(body["quality"])
+        if "strategy" in body:
+            fields |= _evidence(fields["strategy"])
+        if "planned_stop" in fields:
+            t = self.db.journal_trade(account, trade_id)
+            if t is not None:  # the stop drives R: validate with the trade's fills
+                compute(t["direction"], _fills(t["fills"]), fields["planned_stop"], None,
+                        t.get("multiplier") or 1.0)
         if not self.db.journal_update_trade(account, trade_id, fields) and \
                 self.db.journal_trade(account, trade_id) is None:
             raise KeyError("trade not found")
         return self._view(self.db.journal_trade(account, trade_id), self._marks())
 
+    def close(self, account: str, trade_id: int, body: dict) -> dict:
+        """Close the whole open position with one exit fill at `price`."""
+        account = check_account(account)
+        t = self.db.journal_trade(account, trade_id)
+        if t is None:
+            raise KeyError("trade not found")
+        pnl = compute(t["direction"], _fills(t["fills"]), t["planned_stop"], None,
+                      t.get("multiplier") or 1.0)
+        if pnl["status"] != "open":
+            raise JournalError("the trade is already closed")
+        side = "SELL" if t["direction"] == "LONG" else "BUY"
+        return self.add_fill(account, trade_id, {
+            "side": side, "quantity": pnl["open_quantity"], "price": body.get("price"),
+            "fees": body.get("fees"), "executed_at": body.get("executed_at"),
+            "note": body.get("note") or "close"})
+
     def delete(self, account: str, trade_id: int) -> bool:
         return self.db.journal_delete_trade(check_account(account), trade_id)
+
+
+def _mode(v) -> str | None:
+    if v in (None, ""):
+        return None
+    if v not in ("day", "swing"):
+        raise JournalError("mode must be day or swing")
+    return v
+
+
+def _quality(v) -> float | None:
+    q = _num(v, "quality")
+    if q is not None and not 0 <= q <= 100:
+        raise JournalError("quality must be between 0 and 100")
+    return q
+
+
+def _asset(body: dict) -> tuple[str, str | None, float]:
+    asset = str(body.get("asset_type") or "stock").lower()
+    if asset not in ("stock", "option"):
+        raise JournalError("asset_type must be stock or option")
+    if asset == "stock":
+        return "stock", None, 1.0
+    sym = str(body.get("option_symbol") or "").strip().upper()[:40] or None
+    mult = _num(body.get("multiplier"), "multiplier") or 100.0
+    if mult <= 0:
+        raise JournalError("multiplier must be positive")
+    return "option", sym, mult
+
+
+def _evidence(strategy) -> dict:
+    """Snapshot of the strategy's validation status when the trade is logged (a later
+    registry change does not rewrite history)."""
+    if not strategy or strategy not in registry().get("strategies", {}):
+        return {"evidence_status": None, "evidence_label": None}
+    v = for_strategy(strategy)
+    return {"evidence_status": v["status"], "evidence_label": v["label"]}

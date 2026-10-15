@@ -7,6 +7,7 @@ import contextlib
 import csv
 import io
 import logging
+import os
 import re
 import threading
 import time
@@ -44,11 +45,15 @@ from .planning.config import PlanningConfig, load_planning_config
 from .alerts import ALERT_TYPES, AlertEngine, PrefsError, WebhookNotifier
 from .backtest.manager import BacktestBusy, BacktestManager
 from .journal.pnl import JournalError
+from .journal.performance import performance as journal_performance
 from .journal.service import TradeLog
 from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
+from . import rawcache
+from .explain import explain_setup
+from .universe.scanner import UniverseScanner, next_wait
 from .validation import (STATUSES as VALIDATION_STATUSES, for_strategy as validation_for,
                          registry as validation_registry)
 from .swing.config import SwingConfig, load_swing_config
@@ -83,7 +88,8 @@ class Service:
 
     def __init__(self, settings: Settings, market: MarketDataService | None = None,
                  db: Database | None = None, analyst: ClaudeAnalyst | None = None,
-                 options: AlpacaOptionsSource | None = None) -> None:
+                 options: AlpacaOptionsSource | None = None,
+                 with_universe: bool = True) -> None:
         self.settings = settings
         self.market = market or build_market(settings)
         self.db = db or Database(settings.database_path)
@@ -120,6 +126,8 @@ class Service:
             self.market.reserve_lookback(tf, limit)
         self.trade_log = TradeLog(self.db, self.market)
         self._swing_cache: dict[tuple, list[dict]] = {}
+        # The large-universe scanner runs the same engines in a second instance.
+        self.universe = UniverseScanner(self) if with_universe else None
 
     @property
     def is_demo(self) -> bool:
@@ -559,6 +567,41 @@ class Service:
             self.db.put_ai(key, result)
         return {**base, "available": True, "cached": False, **result}
 
+    def rules_explanation(self, symbol: str, mode: str, setup_id: str | None = None) -> dict:
+        """Deterministic explanation of a setup from the engines' facts (no AI)."""
+        if mode not in ("day", "swing"):
+            raise InvalidRequest("mode must be day or swing")
+        symbol = self.market.check_symbol(symbol)
+        try:
+            return explain_setup(self, symbol, mode, setup_id,
+                                 self._scanner_row(setup_id) if setup_id else None)
+        except AnalysisBlocked as exc:
+            return {"symbol": symbol, "mode": mode, "status": "NO_TRADE", "facts": None,
+                    "explanation": None, "ai": False,
+                    "reason": f"Analysis paused: {exc.message}"}
+
+    def save_setup(self, setup_id: str, source: str, note: str = "") -> dict:
+        """Keep a detected setup for later review. It is copied from the scanner's own row
+        (never from the client) and is never treated as a trade."""
+        if source == "watchlist":
+            row = self._scanner_row(setup_id)
+        elif source == "universe" and self.universe is not None:
+            row = self.universe._row(setup_id)
+        else:
+            raise InvalidRequest("source must be watchlist or universe")
+        if row is None:
+            raise InvalidRequest(f"setup {setup_id} is not in the latest {source} scan")
+        keep = ("ticker", "mode", "setup", "strategy", "timeframe", "direction", "status",
+                "signal_state", "entry_trigger", "entry", "stop", "target1", "target2",
+                "risk_reward", "quality", "validation", "price", "last_updated",
+                "data_as_of", "reason", "entry_conditions", "invalidation", "key_level",
+                "nearest_level", "volume_confirmation")
+        return self.db.save_setup({
+            "setup_id": setup_id, "source": source, "ticker": row["ticker"],
+            "mode": row["mode"], "strategy": row["strategy"], "direction": row["direction"],
+            "timeframe": row["timeframe"], "status_at_save": row["status"],
+            "payload": {k: row.get(k) for k in keep}, "note": str(note or "")[:500]})
+
     def _scanner_row(self, setup_id: str) -> dict | None:
         """The latest scanner row for a setup (live entry state), without rescanning."""
         snap = self.scanner.snapshot or {}
@@ -767,24 +810,64 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
 
     @contextlib.asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        app.state.service = service or Service(settings)
-        task = None
+        app.state.service = svc_ = service or Service(settings)
+        tasks = []
+        if rawcache.enabled() and not svc_.is_demo:  # warm restart (see app/rawcache.py)
+            info = await run_in_threadpool(rawcache.restore, svc_.market,
+                                           rawcache.cache_dir() / "watchlist.json.gz")
+            log.info("Raw bar cache restored: %s", info)
         if run_scanner and settings.scan_interval_seconds > 0:
-            task = asyncio.create_task(_scanner(app.state.service))
+            tasks.append(asyncio.create_task(_scanner(svc_)))
+        if run_scanner and svc_.universe is not None and svc_.universe.interval > 0:
+            tasks.append(asyncio.create_task(_universe(svc_)))
         yield
-        if task:
+        for task in tasks:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+        if rawcache.enabled() and not svc_.is_demo:
+            await run_in_threadpool(_save_caches, svc_)
+
+    def _save_caches(svc_: Service) -> None:
+        try:
+            rawcache.save(svc_.market, rawcache.cache_dir() / "watchlist.json.gz")
+            eng = svc_.universe and svc_.universe._engine
+            if eng is not None:
+                rawcache.save(eng.market, rawcache.cache_dir() / "universe.json.gz")
+        except OSError as exc:
+            log.warning("Could not save the raw bar cache: %s", exc)
+
+    async def _universe(svc_: Service) -> None:
+        """Universe scheduler: scans the liquid-stock universe every
+        UNIVERSE_SCAN_INTERVAL_SECONDS (one run at a time, across processes too). Starts
+        after UNIVERSE_START_DELAY_SECONDS so the watchlist warms up first."""
+        await asyncio.sleep(float(os.environ.get("UNIVERSE_START_DELAY_SECONDS", "60")))
+        while True:
+            try:
+                if svc_.universe.due():
+                    await run_in_threadpool(svc_.universe.run, "scheduled")
+                    if rawcache.enabled() and not svc_.is_demo:
+                        await run_in_threadpool(_save_caches, svc_)
+            except Exception as exc:  # keep the loop alive
+                svc_.universe.last_error = str(exc)
+                log.exception("Universe scan failed")
+            await asyncio.sleep(next_wait(svc_.universe))
 
     async def _scanner(svc: Service) -> None:
         """Server-side scheduler: every SCAN_INTERVAL_SECONDS, rescan only if a new eligible
         candle can exist (or the watchlist changed). No browser tab is needed."""
+        saved_at = time.monotonic()
         while True:
             try:
                 if svc.scanner.due():
                     await run_in_threadpool(svc.scanner.run, False, "scheduled")
                 svc.scanner.last_error = None
+                # Periodic cache save, so even an unclean stop restarts warm.
+                if rawcache.enabled() and not svc.is_demo and \
+                        time.monotonic() - saved_at > 900 and svc.scanner.snapshot:
+                    await run_in_threadpool(rawcache.save, svc.market,
+                                            rawcache.cache_dir() / "watchlist.json.gz")
+                    saved_at = time.monotonic()
             except Exception as exc:  # keep the loop alive; errors are surfaced per-symbol
                 svc.scanner.last_error = str(exc)
                 log.exception("Background scan failed")
@@ -821,6 +904,9 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                                      if k != "suppressed"}
                                     | {"suppressed": len(s.alerts.last_run["suppressed"])}
                                     if s.alerts.last_run else None)},
+            "universe": ({"enabled": s.universe.interval > 0,
+                          "running": s.universe.current,
+                          "last_error": s.universe.last_error} if s.universe else None),
             "live_trading": False,
             "disclaimer": DISCLAIMER,
         }
@@ -923,6 +1009,77 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
         """The frozen historical validation behind the strategy status labels (read-only;
         generated from research/validation/results/report.json)."""
         return validation_registry()
+
+    # --------------------------------------------------------- universe scanner
+
+    def _universe_svc() -> UniverseScanner:
+        u = svc().universe
+        if u is None:
+            raise HTTPException(503, {"code": "UNAVAILABLE", "message": "universe disabled"})
+        return u
+
+    @app.get("/api/universe/status")
+    def universe_status() -> dict:
+        """Universe definition, scan progress (total, scanned, remaining, failures) and the
+        last completed scan. Coverage is the configured universe, never the whole market."""
+        return _universe_svc().status() | {"is_demo": svc().is_demo}
+
+    @app.get("/api/universe/members")
+    def universe_members() -> dict:
+        u = svc().db.latest_universe()
+        return u or {"members": [], "size": 0}
+
+    @app.get("/api/universe/setups")
+    def universe_setups(mode: str | None = None, side: str | None = None,
+                        status: str | None = None, min_rr: float | None = None,
+                        min_quality: float | None = None, strategy: str | None = None,
+                        signal_state: str | None = None, validation: str | None = None,
+                        volume: str | None = None, max_level_atr: float | None = None,
+                        max_level_pct: float | None = None,
+                        min_liquidity: float | None = None) -> dict:
+        """Latest persisted universe results (filters as /api/scanner)."""
+        if mode not in (None, "day", "swing") or side not in (None, "bullish", "bearish"):
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": "mode must be day|swing, side bullish|bearish"})
+        bad = _bad_choices(signal_state=signal_state, validation=validation, volume=volume)
+        if bad:
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message": bad})
+        return _universe_svc().setups(
+            mode=mode, side=side, status=status, min_rr=min_rr, min_quality=min_quality,
+            strategy=strategy, signal_state=signal_state, validation=validation,
+            volume=volume, max_level_atr=max_level_atr, max_level_pct=max_level_pct,
+            min_liquidity=min_liquidity)
+
+    @app.post("/api/universe/run")
+    def universe_run(rebuild: bool = False) -> dict:
+        """Start a universe scan in the background (refused while one is running)."""
+        u = _universe_svc()
+        if u.current is not None or u._lock.locked():
+            raise HTTPException(409, {"code": "BUSY", "message": "a universe scan is running"})
+        threading.Thread(target=u.run, args=("manual", rebuild), daemon=True).start()
+        return {"started": True}
+
+    @app.get("/api/universe/explain/{symbol}")
+    def universe_explain(symbol: str, mode: str = "day", setup_id: str | None = None) -> dict:
+        """Rules-based explanation of a universe setup (deterministic, not AI)."""
+        if mode not in ("day", "swing"):
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message": "bad mode"})
+        try:
+            return _universe_svc().explain(symbol, mode, setup_id)
+        except KeyError as exc:
+            raise HTTPException(404, {"code": "NOT_FOUND", "message": str(exc).strip("'")})
+        except InvalidRequest as exc:
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message": str(exc)})
+        except DataError as exc:
+            raise _data_error(exc) from exc
+
+    @app.get("/api/explain/{symbol}")
+    def rules_explain(symbol: str, mode: str = "day", setup_id: str | None = None) -> dict:
+        """Rules-based explanation of a watchlist setup (deterministic, not AI)."""
+        try:
+            return svc().rules_explanation(symbol, mode, setup_id)
+        except DataError as exc:
+            raise _data_error(exc) from exc
 
     @app.post("/api/scanner/run")
     def scanner_run() -> dict:
@@ -1104,6 +1261,53 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
             raise HTTPException(409, str(exc)) from None
         except KeyError as exc:
             raise HTTPException(404, str(exc).strip("'")) from None
+
+    @app.post("/api/journal/{account}/trades/{trade_id}/close")
+    def journal_close(account: str, trade_id: int, body: dict = Body(...)) -> dict:
+        """Close the open position with one exit fill (price, executed_at, fees)."""
+        return _journal(svc().trade_log.close, account, trade_id, body)
+
+    @app.get("/api/performance")
+    def trade_performance(account: str = "actual", ticker: str | None = None,
+                          strategy: str | None = None, mode: str | None = None,
+                          asset_type: str | None = None, start: str | None = None,
+                          end: str | None = None) -> dict:
+        """Performance of ONE account (actual or paper; never combined) from closed trades."""
+        if mode not in (None, "", "day", "swing") or asset_type not in (None, "", "stock",
+                                                                         "option"):
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": "mode day|swing, asset_type stock|option"})
+        try:
+            for d in (start, end):
+                if d:
+                    date.fromisoformat(d)
+        except ValueError:
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": "start/end must be YYYY-MM-DD"}) from None
+        data = _journal(svc().trade_log.list, account)
+        return journal_performance(data["trades"], data["account"], {
+            "ticker": ticker, "strategy": strategy, "mode": mode, "asset_type": asset_type,
+            "start": start, "end": end})
+
+    @app.get("/api/setups/saved")
+    def saved_setups() -> dict:
+        """Detected setups you saved. Not trades: no fills, excluded from all P&L."""
+        return {"setups": svc().db.saved_setups(), "are_trades": False}
+
+    @app.post("/api/setups/saved")
+    def save_setup(body: dict = Body(...)) -> dict:
+        try:
+            return svc().save_setup(str(body.get("setup_id") or ""),
+                                    str(body.get("source") or "watchlist"),
+                                    str(body.get("note") or ""))
+        except InvalidRequest as exc:
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message": str(exc)})
+
+    @app.delete("/api/setups/saved/{sid}")
+    def delete_saved_setup(sid: int) -> dict:
+        if not svc().db.delete_saved_setup(sid):
+            raise HTTPException(404, {"code": "NOT_FOUND", "message": "saved setup not found"})
+        return {"deleted": sid}
 
     @app.get("/api/journal/{account}")
     def journal_list(account: str) -> dict:

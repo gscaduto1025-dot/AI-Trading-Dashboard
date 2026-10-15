@@ -24,6 +24,11 @@ import type {
   RecordedSetup,
   ResearchValidation,
   ScannerPreset,
+  Performance,
+  RulesExplanationResponse,
+  SavedSetup,
+  UniverseSetups,
+  UniverseStatus,
   SessionKind,
   StrategyEvaluation,
   OptionsAnalysis,
@@ -174,6 +179,28 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  journalClose: (account: JournalAccount, id: number, body: Record<string, unknown>) =>
+    request<JournalTrade>(`/api/journal/${account}/trades/${id}/close`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  performance: (f: Record<string, string | undefined>) => request<Performance>(`/api/performance?${q(f)}`),
+  savedSetups: () => request<{ setups: SavedSetup[]; are_trades: false }>("/api/setups/saved"),
+  saveSetup: (setup_id: string, source: "watchlist" | "universe", note = "") =>
+    request<SavedSetup>("/api/setups/saved", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ setup_id, source, note }),
+    }),
+  deleteSavedSetup: (id: number) => request<{ deleted: number }>(`/api/setups/saved/${id}`, { method: "DELETE" }),
+  universeStatus: () => request<UniverseStatus>("/api/universe/status"),
+  universeSetups: (f: ScannerFilters) => request<UniverseSetups>(`/api/universe/setups?${q({ ...f })}`),
+  universeRun: (rebuild = false) => request<{ started: boolean }>(`/api/universe/run?${q({ rebuild })}`, { method: "POST" }),
+  universeExplain: (symbol: string, mode: Mode, setupId: string | null) =>
+    request<RulesExplanationResponse>(`/api/universe/explain/${symbol}?${q({ mode, setup_id: setupId ?? undefined })}`),
+  explain: (symbol: string, mode: Mode, setupId: string | null) =>
+    request<RulesExplanationResponse>(`/api/explain/${symbol}?${q({ mode, setup_id: setupId ?? undefined })}`),
   journalDelete: (account: JournalAccount, id: number) =>
     request<{ ok: boolean }>(`/api/journal/${account}/trades/${id}`, { method: "DELETE" }),
   backtestDefaults: () => request<BacktestDefaults>("/api/backtests/config"),

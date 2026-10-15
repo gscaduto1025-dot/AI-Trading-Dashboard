@@ -146,6 +146,58 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     cost_usd REAL
 );
 CREATE INDEX IF NOT EXISTS ai_usage_time ON ai_usage (called_at);
+-- Universe scanner. One row per universe build, one per scan run (progress, lease
+-- heartbeat for no-duplicate jobs), and the latest result per (symbol, mode).
+CREATE TABLE IF NOT EXISTS universe_builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    built_at TEXT NOT NULL,
+    payload TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS universe_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at INTEGER NOT NULL,
+    finished_at INTEGER,
+    heartbeat INTEGER NOT NULL,
+    status TEXT NOT NULL,          -- running | completed | interrupted | failed
+    trigger TEXT NOT NULL,
+    total INTEGER NOT NULL,
+    scanned INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    setups INTEGER NOT NULL DEFAULT 0,
+    build_id INTEGER,
+    error TEXT,
+    requests INTEGER
+);
+CREATE TABLE IF NOT EXISTS universe_results (
+    symbol TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    run_id INTEGER NOT NULL,
+    scanned_at INTEGER NOT NULL,
+    status TEXT NOT NULL,          -- ok | DATA_UNAVAILABLE
+    payload TEXT NOT NULL,         -- {"rows": [...], "info": {...}, "error": ...}
+    PRIMARY KEY (symbol, mode)
+);
+CREATE TABLE IF NOT EXISTS universe_setup_seen (
+    setup_id TEXT PRIMARY KEY,
+    first_seen INTEGER NOT NULL,
+    last_seen INTEGER NOT NULL
+);
+-- Detected setups the user chose to keep (scanner or universe). A saved setup is NEVER a
+-- trade: it has no fills and is excluded from every P&L statistic.
+CREATE TABLE IF NOT EXISTS saved_setups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    setup_id TEXT NOT NULL UNIQUE,
+    source TEXT NOT NULL CHECK (source IN ('watchlist', 'universe')),
+    ticker TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    strategy TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
+    status_at_save TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    note TEXT NOT NULL DEFAULT '',
+    saved_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -165,6 +217,26 @@ class Database:
         with self._lock:
             self._conn.execute("PRAGMA foreign_keys = ON")
             self._conn.executescript(SCHEMA)
+            self._migrate()
+
+    # Columns added after the first release, applied to existing databases in place.
+    JOURNAL_COLUMNS = {
+        "mode": "TEXT CHECK (mode IN ('day', 'swing'))",
+        "asset_type": "TEXT NOT NULL DEFAULT 'stock' CHECK (asset_type IN ('stock', 'option'))",
+        "option_symbol": "TEXT",
+        "multiplier": "REAL NOT NULL DEFAULT 1 CHECK (multiplier > 0)",
+        "planned_target2": "REAL",
+        "quality": "REAL",
+        "evidence_status": "TEXT",
+        "evidence_label": "TEXT",
+    }
+
+    def _migrate(self) -> None:
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(journal_trades)")}
+        for col, decl in self.JOURNAL_COLUMNS.items():
+            if col not in have:
+                self._conn.execute(f"ALTER TABLE journal_trades ADD COLUMN {col} {decl}")
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
@@ -421,11 +493,16 @@ class Database:
         with self._lock, self._conn:
             cur = self._conn.execute(
                 """INSERT INTO journal_trades (account, ticker, direction, strategy, setup_id,
-                   planned_stop, planned_target, notes, created_at, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                   planned_stop, planned_target, notes, created_at, updated_at, mode,
+                   asset_type, option_symbol, multiplier, planned_target2, quality,
+                   evidence_status, evidence_label)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (account, row["ticker"], row["direction"], row.get("strategy"),
                  row.get("setup_id"), row.get("planned_stop"), row.get("planned_target"),
-                 row.get("notes") or "", now, now))
+                 row.get("notes") or "", now, now, row.get("mode"),
+                 row.get("asset_type") or "stock", row.get("option_symbol"),
+                 row.get("multiplier") or 1.0, row.get("planned_target2"), row.get("quality"),
+                 row.get("evidence_status"), row.get("evidence_label")))
             tid = cur.lastrowid
             for f in fills:
                 self._insert_fill(tid, f)
@@ -472,7 +549,9 @@ class Database:
 
     def journal_update_trade(self, account: str, trade_id: int, fields: dict) -> bool:
         allowed = {k: v for k, v in fields.items()
-                   if k in ("strategy", "setup_id", "planned_stop", "planned_target", "notes")}
+                   if k in ("strategy", "setup_id", "planned_stop", "planned_target", "notes",
+                            "mode", "option_symbol", "planned_target2", "quality",
+                            "evidence_status", "evidence_label")}
         if not allowed:
             return False
         sets = ", ".join(f"{k}=?" for k in allowed)
@@ -513,6 +592,115 @@ class Database:
             self._conn.executemany(
                 "INSERT INTO watchlist (symbol, position, added_at) VALUES (?,?,?)",
                 [(s, i, now) for i, s in enumerate(symbols)])
+
+    # ----------------------------------------------------------------- saved setups
+
+    def save_setup(self, row: dict) -> dict:
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO saved_setups (setup_id, source, ticker, mode, strategy, direction,
+                   timeframe, status_at_save, payload, note, saved_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(setup_id) DO UPDATE SET
+                   note=excluded.note""",
+                (row["setup_id"], row["source"], row["ticker"], row["mode"], row["strategy"],
+                 row["direction"], row["timeframe"], row["status_at_save"],
+                 json.dumps(row["payload"], default=str), row.get("note") or "",
+                 int(time.time())))
+        return next(x for x in self.saved_setups() if x["setup_id"] == row["setup_id"])
+
+    def saved_setups(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM saved_setups ORDER BY saved_at DESC, id DESC").fetchall()
+        return [dict(r) | {"payload": json.loads(r["payload"])} for r in rows]
+
+    def delete_saved_setup(self, sid: int) -> bool:
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM saved_setups WHERE id=?", (sid,)).rowcount > 0
+
+    # ------------------------------------------------------------- universe scanner
+
+    def save_universe(self, payload: dict) -> int:
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "INSERT INTO universe_builds (built_at, payload) VALUES (?,?)",
+                (payload["built_at"], json.dumps(payload))).lastrowid
+
+    def latest_universe(self) -> dict | None:
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT id, payload FROM universe_builds ORDER BY id DESC LIMIT 1").fetchone()
+        return (json.loads(r["payload"]) | {"build_id": r["id"]}) if r else None
+
+    def claim_universe_run(self, trigger: str, total: int, build_id: int | None,
+                           stale_after: int = 180) -> int | None:
+        """Start a run unless another live run holds the lease (heartbeat within
+        `stale_after` s). Stale running rows are marked interrupted. Atomic."""
+        now = int(time.time())
+        with self._lock, self._conn:
+            self._conn.execute(
+                "UPDATE universe_runs SET status='interrupted', finished_at=? "
+                "WHERE status='running' AND heartbeat < ?", (now, now - stale_after))
+            if self._conn.execute("SELECT 1 FROM universe_runs WHERE status='running'"
+                                  ).fetchone():
+                return None
+            return self._conn.execute(
+                """INSERT INTO universe_runs (started_at, heartbeat, status, trigger, total,
+                   build_id) VALUES (?,?,?,?,?,?)""",
+                (now, now, "running", trigger, total, build_id)).lastrowid
+
+    def update_universe_run(self, run_id: int, **fields) -> None:
+        fields["heartbeat"] = int(time.time())
+        cols = ", ".join(f"{k}=?" for k in fields)
+        with self._lock, self._conn:
+            self._conn.execute(f"UPDATE universe_runs SET {cols} WHERE id=?",
+                               (*fields.values(), run_id))
+
+    def interrupt_universe_runs(self) -> int:
+        """At startup: no run can still be alive in this process."""
+        with self._lock, self._conn:
+            return self._conn.execute(
+                "UPDATE universe_runs SET status='interrupted', finished_at=? "
+                "WHERE status='running'", (int(time.time()),)).rowcount
+
+    def universe_runs(self, limit: int = 10) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM universe_runs ORDER BY id DESC LIMIT ?",
+                                      (limit,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def put_universe_result(self, symbol: str, mode: str, run_id: int, status: str,
+                            payload: dict) -> None:
+        now = int(time.time())
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO universe_results (symbol, mode, run_id, scanned_at, status,
+                   payload) VALUES (?,?,?,?,?,?) ON CONFLICT(symbol, mode) DO UPDATE SET
+                   run_id=excluded.run_id, scanned_at=excluded.scanned_at,
+                   status=excluded.status, payload=excluded.payload""",
+                (symbol, mode, run_id, now, status, json.dumps(payload, default=str)))
+            for r in payload.get("rows") or []:
+                self._conn.execute(
+                    """INSERT INTO universe_setup_seen (setup_id, first_seen, last_seen)
+                       VALUES (?,?,?) ON CONFLICT(setup_id) DO UPDATE SET
+                       last_seen=excluded.last_seen""", (r["id"], now, now))
+
+    def universe_results(self, symbols: list[str] | None = None) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM universe_results").fetchall()
+            seen = {r["setup_id"]: (r["first_seen"], r["last_seen"]) for r in
+                    self._conn.execute("SELECT * FROM universe_setup_seen").fetchall()}
+        out = []
+        for r in rows:
+            if symbols is not None and r["symbol"] not in symbols:
+                continue
+            p = json.loads(r["payload"])
+            for row in p.get("rows") or []:
+                f, last = seen.get(row["id"], (None, None))
+                row["first_seen"], row["last_seen"] = f, last
+            out.append({"symbol": r["symbol"], "mode": r["mode"], "run_id": r["run_id"],
+                        "scanned_at": r["scanned_at"], "status": r["status"], **p})
+        return out
 
     # ----------------------------------------------------------- scanner presets
 

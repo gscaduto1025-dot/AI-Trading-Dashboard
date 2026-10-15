@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 backend/*.db
+backend/data/
 backend/.env
 
 # Node / Next.js

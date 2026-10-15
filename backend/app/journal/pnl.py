@@ -6,9 +6,11 @@ A trade is a direction plus a list of fills:
 A fill may never take the position past flat (reversing needs a new trade). Fees are
 per fill and always reduce P&L.
 
-Realized P&L of a closing fill = (exit - average entry) x quantity x direction. The average
-entry changes only when the position is increased. R multiple = net realized P&L / initial
-risk, where initial risk = |first entry price - planned stop| x the largest position held.
+Realized P&L of a closing fill = (exit - average entry) x quantity x direction x
+multiplier. The average entry changes only when the position is increased. R multiple =
+net realized P&L / initial risk, where initial risk = |first entry price - planned stop| x
+the largest position held x multiplier. The multiplier is 1 for stocks and the contract
+multiplier (normally 100) for options, whose prices are per share of the underlying.
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ def validate_fill(f: Fill) -> None:
 
 
 def compute(direction: str, fills: list[Fill], planned_stop: float | None = None,
-            mark: float | None = None) -> dict:
+            mark: float | None = None, multiplier: float = 1.0) -> dict:
     """P&L summary. Raises JournalError if the fills are inconsistent."""
     if direction not in ("LONG", "SHORT"):
         raise JournalError("direction must be LONG or SHORT")
@@ -79,7 +81,7 @@ def compute(direction: str, fills: list[Fill], planned_stop: float | None = None
             if f.quantity > pos + EPS:
                 raise JournalError(f"{f.side} of {f.quantity:g} exceeds the open position of "
                                    f"{pos:g}; a reversal must be recorded as a new trade")
-            pnl = (f.price - avg) * f.quantity * sgn
+            pnl = (f.price - avg) * f.quantity * sgn * multiplier
             realized_gross += pnl
             pos -= f.quantity
             exits_qty += f.quantity
@@ -90,9 +92,10 @@ def compute(direction: str, fills: list[Fill], planned_stop: float | None = None
                 pos = 0.0
     status = "open" if pos > EPS else ("closed" if entries_qty else "empty")
     net = realized_gross - fees
-    risk = abs(first_entry - planned_stop) * max_pos \
+    risk = abs(first_entry - planned_stop) * max_pos * multiplier \
         if first_entry is not None and planned_stop is not None else None
-    unrealized = (mark - avg) * pos * sgn if mark is not None and pos > EPS else None
+    unrealized = (mark - avg) * pos * sgn * multiplier \
+        if mark is not None and pos > EPS else None
     times = [f.executed_at for f in fills]
     return {
         "status": status,
@@ -112,6 +115,10 @@ def compute(direction: str, fills: list[Fill], planned_stop: float | None = None
         "r_multiple": round(net / risk, 4) if risk and status == "closed" else None,
         "opened_at": min(times) if times else None,
         "closed_at": max(times) if status == "closed" else None,
+        "multiplier": multiplier,
+        "result": (None if status != "closed" else "breakeven" if abs(net) < 0.005
+                   else "win" if net > 0 else "loss"),
+        "duration_seconds": (max(times) - min(times)) if status == "closed" and times else None,
     }
 
 
@@ -120,8 +127,8 @@ def stats(trades: list[dict]) -> dict:
     closed = [t for t in trades if t["pnl"]["status"] == "closed"]
     n = len(closed)
     nets = [t["pnl"]["realized_net"] for t in closed]
-    wins = [x for x in nets if x > 0]
-    losses = [x for x in nets if x <= 0]
+    wins = [x for x in nets if x >= 0.005]
+    losses = [x for x in nets if x < 0.005]
     rs = [t["pnl"]["r_multiple"] for t in closed if t["pnl"]["r_multiple"] is not None]
     gl = -sum(losses)
     return {
