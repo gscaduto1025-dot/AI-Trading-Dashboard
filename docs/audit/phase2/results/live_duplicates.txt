@@ -1,0 +1,7 @@
+setups rows 41 | duplicate (symbol,mode,timeframe,bar_time,setup_type,direction): 0
+strategy_signals 9 | duplicate (ticker,strategy,timeframe,direction,session_date,trigger_time): 0
+alerts 55 actionable 0 | dedupe_key duplicates: 0
+alert types {'swing_candidate': 5, 'approaching_support': 21, 'approaching_resistance': 16, 'setup_invalidated': 12, 'target_reached': 1}
+same (type, setup/subject, candle) stored more than once: 0
+distinct scans in log 14 | duplicate setup ids within a scan: 0
+webhook deliveries recorded: 0 (no ALERT_WEBHOOK_URL configured in this run)

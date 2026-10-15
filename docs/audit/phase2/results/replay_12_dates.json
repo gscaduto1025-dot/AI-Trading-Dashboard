@@ -1,0 +1,535 @@
+{
+ "moments": [
+  {
+   "as_of": "2025-03-12T10:47:00-04:00",
+   "label": "normal session, morning",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 2,
+    "WATCHING": 7,
+    "NO_TRADE": 171
+   },
+   "swing_status": {
+    "WATCHING": 5,
+    "NO_TRADE": 175
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 91917,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     16
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     16
+    ],
+    [
+     "No confirmed high was swept and reclaimed with a reversal candle this session.",
+     13
+    ]
+   ],
+   "seconds": 59.0
+  },
+  {
+   "as_of": "2025-06-18T13:22:00-04:00",
+   "label": "normal session, FOMC day",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 1,
+    "WATCHING": 1,
+    "NO_TRADE": 178
+   },
+   "swing_status": {
+    "WATCHING": 5,
+    "NO_TRADE": 175
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 92327,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     18
+    ]
+   ],
+   "seconds": 53.2
+  },
+  {
+   "as_of": "2025-09-23T15:05:00-04:00",
+   "label": "normal session, late",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "WATCHING": 3,
+    "NO_TRADE": 177
+   },
+   "swing_status": {
+    "TRIGGERED": 1,
+    "WATCHING": 4,
+    "NO_TRADE": 175
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 91255,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     18
+    ],
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     15
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     12
+    ]
+   ],
+   "seconds": 50.0
+  },
+  {
+   "as_of": "2025-04-07T10:15:00-04:00",
+   "label": "high volatility (tariff sell-off)",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "WATCHING": 3,
+    "NO_TRADE": 177
+   },
+   "swing_status": {
+    "NO_TRADE": 180
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 90797,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed low was swept and reclaimed with a reversal candle this session.",
+     15
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     12
+    ],
+    [
+     "The first confirmed breakout was up at 09:45.",
+     10
+    ]
+   ],
+   "seconds": 68.0
+  },
+  {
+   "as_of": "2025-04-09T14:00:00-04:00",
+   "label": "high volatility (+9.5% rally day)",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "WATCHING": 5,
+    "NO_TRADE": 175
+   },
+   "swing_status": {
+    "NO_TRADE": 180
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 90309,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     30
+    ],
+    [
+     "No objective rejection of a confirmed support zone this session.",
+     18
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     17
+    ]
+   ],
+   "seconds": 73.2
+  },
+  {
+   "as_of": "2024-08-05T11:30:00-04:00",
+   "label": "high volatility (Aug-2024 VIX spike)",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 1,
+    "WATCHING": 4,
+    "NO_TRADE": 175
+   },
+   "swing_status": {
+    "WATCHING": 10,
+    "NO_TRADE": 170
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 90474,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "Abnormal opening gap 20.65 > 3.0 daily ATR (5.37)",
+     20
+    ],
+    [
+     "No objective rejection of a confirmed resistance zone this session.",
+     15
+    ],
+    [
+     "No confirmed low was swept and reclaimed with a reversal candle this session.",
+     14
+    ]
+   ],
+   "seconds": 68.4
+  },
+  {
+   "as_of": "2024-11-29T12:15:00-05:00",
+   "label": "low volume, early close 13:00",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 1,
+    "WATCHING": 3,
+    "NO_TRADE": 176
+   },
+   "swing_status": {
+    "WATCHING": 6,
+    "TRIGGERED": 1,
+    "NO_TRADE": 173
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 89467,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     18
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     17
+    ],
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     16
+    ]
+   ],
+   "seconds": 70.5
+  },
+  {
+   "as_of": "2024-12-24T11:40:00-05:00",
+   "label": "low volume, Christmas Eve early close",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 1,
+    "WATCHING": 2,
+    "NO_TRADE": 177
+   },
+   "swing_status": {
+    "WATCHING": 11,
+    "NO_TRADE": 169
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 90622,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No objective rejection of a confirmed support zone this session.",
+     18
+    ]
+   ],
+   "seconds": 69.6
+  },
+  {
+   "as_of": "2025-01-10T09:10:00-05:00",
+   "label": "pre-market (before the open)",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 4,
+    "NO_TRADE": 176
+   },
+   "swing_status": {
+    "WATCHING": 6,
+    "NO_TRADE": 174
+   },
+   "future_candles_poisoned": 46,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 88908,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     24
+    ],
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No objective rejection of a confirmed resistance zone this session.",
+     17
+    ]
+   ],
+   "seconds": 68.3
+  },
+  {
+   "as_of": "2025-07-03T16:30:00-04:00",
+   "label": "after an early close",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 2,
+    "NO_TRADE": 178
+   },
+   "swing_status": {
+    "WATCHING": 5,
+    "NO_TRADE": 175
+   },
+   "future_candles_poisoned": 0,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 92729,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No objective rejection of a confirmed support zone this session.",
+     18
+    ],
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     16
+    ],
+    [
+     "No objective rejection of a confirmed resistance zone this session.",
+     16
+    ]
+   ],
+   "seconds": 70.8
+  },
+  {
+   "as_of": "2025-12-26T13:05:00-05:00",
+   "label": "low volume, day after Christmas",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "TRIGGERED": 3,
+    "WATCHING": 1,
+    "NO_TRADE": 176
+   },
+   "swing_status": {
+    "WATCHING": 3,
+    "NO_TRADE": 177
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 93723,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No confirmed opening-range breakout before 11:30 ET.",
+     28
+    ],
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     17
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     17
+    ]
+   ],
+   "seconds": 73.1
+  },
+  {
+   "as_of": "2026-02-17T11:00:00-05:00",
+   "label": "normal session, recent",
+   "day_setups": 180,
+   "swing_setups": 180,
+   "day_status": {
+    "WATCHING": 1,
+    "NO_TRADE": 179
+   },
+   "swing_status": {
+    "WATCHING": 2,
+    "NO_TRADE": 178
+   },
+   "future_candles_poisoned": 90,
+   "identical_with_poisoned_future": true,
+   "plan_errors": 0,
+   "api_series": 108,
+   "timestamps": {
+    "series": 108,
+    "bars": 95395,
+    "unsorted": 0,
+    "duplicates": 0,
+    "misaligned": 0
+   },
+   "top_day_no_trade_reasons": [
+    [
+     "No completed candle closed above a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No completed candle closed below a confirmed zone with the required follow-through this session.",
+     18
+    ],
+    [
+     "No objective rejection of a confirmed resistance zone this session.",
+     14
+    ]
+   ],
+   "seconds": 72.9
+  }
+ ],
+ "plan_errors": [],
+ "coverage": {
+  "day:breakout_retest": {
+   "WATCHING": 10,
+   "NO_TRADE": 422
+  },
+  "day:liquidity_sweep_reversal": {
+   "TRIGGERED": 14,
+   "WATCHING": 17,
+   "NO_TRADE": 401
+  },
+  "day:opening_range_breakout": {
+   "NO_TRADE": 432
+  },
+  "day:sr_rejection": {
+   "NO_TRADE": 432
+  },
+  "day:trend_pullback": {
+   "WATCHING": 3,
+   "NO_TRADE": 428,
+   "TRIGGERED": 1
+  },
+  "swing:swing_breakout": {
+   "WATCHING": 41,
+   "NO_TRADE": 390,
+   "TRIGGERED": 1
+  },
+  "swing:swing_consolidation_breakout": {
+   "NO_TRADE": 418,
+   "WATCHING": 14
+  },
+  "swing:swing_sr_reversal": {
+   "NO_TRADE": 430,
+   "WATCHING": 2
+  },
+  "swing:swing_trend_continuation": {
+   "NO_TRADE": 431,
+   "TRIGGERED": 1
+  },
+  "swing:swing_trend_reversal": {
+   "NO_TRADE": 432
+  }
+ },
+ "lookahead_failures": [],
+ "min_rr": 2.0
+}

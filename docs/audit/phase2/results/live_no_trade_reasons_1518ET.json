@@ -1,0 +1,216 @@
+{
+ "day": {
+  "evaluated_at": "2026-10-15T15:18:51.037870-04:00",
+  "strategies": {
+   "breakout_retest": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 36,
+    "no_trade_genuine": 0,
+    "top_reasons": [
+     [
+      "#Min: # of # candle slots this session have no trades (thin liquidity or data gaps)",
+      36
+     ]
+    ]
+   },
+   "liquidity_sweep_reversal": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 36,
+    "no_trade_genuine": 0,
+    "top_reasons": [
+     [
+      "#Min: # of # candle slots this session have no trades (thin liquidity or data gaps)",
+      36
+     ]
+    ]
+   },
+   "opening_range_breakout": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 36,
+    "no_trade_genuine": 0,
+    "top_reasons": [
+     [
+      "#Min: # of # candle slots this session have no trades (thin liquidity or data gaps)",
+      36
+     ]
+    ]
+   },
+   "sr_rejection": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 36,
+    "no_trade_genuine": 0,
+    "top_reasons": [
+     [
+      "#Min: # of # candle slots this session have no trades (thin liquidity or data gaps)",
+      36
+     ]
+    ]
+   },
+   "trend_pullback": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 36,
+    "no_trade_genuine": 0,
+    "top_reasons": [
+     [
+      "#Min: # of # candle slots this session have no trades (thin liquidity or data gaps)",
+      36
+     ]
+    ]
+   }
+  }
+ },
+ "swing": {
+  "evaluated_at": "2026-10-15T15:19:07.208902-04:00",
+  "strategies": {
+   "swing_breakout": {
+    "total": 36,
+    "status": {
+     "WATCHING": 3,
+     "NO_TRADE": 33
+    },
+    "no_trade_data_related": 0,
+    "no_trade_genuine": 33,
+    "top_reasons": [
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: daily zone # (# reactions)# n",
+      13
+     ],
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: weekly zone # (# reactions)# ",
+      7
+     ],
+     [
+      "No completed close beyond an established support zone#",
+      4
+     ],
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: #year high # (#))# The target",
+      3
+     ]
+    ]
+   },
+   "swing_consolidation_breakout": {
+    "total": 36,
+    "status": {
+     "WATCHING": 3,
+     "NO_TRADE": 33
+    },
+    "no_trade_data_related": 0,
+    "no_trade_genuine": 33,
+    "top_reasons": [
+     [
+      "No qualifying consolidation range with a completed breakout#",
+      12
+     ],
+     [
+      "# broke the #candle range on relative volume # < # (FULL# consolidated volume (SIP))",
+      8
+     ],
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: weekly zone # (# reactions)# ",
+      6
+     ],
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: daily zone # (# reactions)# n",
+      5
+     ]
+    ]
+   },
+   "swing_sr_reversal": {
+    "total": 36,
+    "status": {
+     "TRIGGERED": 1,
+     "NO_TRADE": 35
+    },
+    "no_trade_data_related": 0,
+    "no_trade_genuine": 35,
+    "top_reasons": [
+     [
+      "No accepted support/resistance reversal trigger in the last # #Week candle(s)#",
+      12
+     ],
+     [
+      "No accepted support/resistance reversal trigger in the last # #Day candle(s)#",
+      12
+     ],
+     [
+      "No confirmed reversal at a daily or weekly support zone#",
+      3
+     ],
+     [
+      "Poor risk/reward: T# # gives #:# < #:# (Nearest confirmed target ahead of entry: daily zone # (# reactions)# n",
+      2
+     ]
+    ]
+   },
+   "swing_trend_continuation": {
+    "total": 36,
+    "status": {
+     "TRIGGERED": 1,
+     "NO_TRADE": 35
+    },
+    "no_trade_data_related": 0,
+    "no_trade_genuine": 35,
+    "top_reasons": [
+     [
+      "No established trend now: EMA stack bullish (EMA# > EMA# > EMA#); structure uptrend (higher highs and higher l",
+      9
+     ],
+     [
+      "No accepted trend continuation trigger in the last # #Day candle(s)#",
+      7
+     ],
+     [
+      "No accepted trend continuation trigger in the last # #Week candle(s)#",
+      7
+     ],
+     [
+      "No established trend now: EMA stack bullish (EMA# > EMA# > EMA#); structure range / mixed structure#",
+      5
+     ]
+    ]
+   },
+   "swing_trend_reversal": {
+    "total": 36,
+    "status": {
+     "NO_TRADE": 36
+    },
+    "no_trade_data_related": 0,
+    "no_trade_genuine": 36,
+    "top_reasons": [
+     [
+      "Structure broke on # but no confirmed lower high yet # one break is not a reversal#",
+      14
+     ],
+     [
+      "Structure broke on # but no confirmed higher low yet # one break is not a reversal#",
+      8
+     ],
+     [
+      "No downtrend #> break of structure #> higher low #> higher high sequence within # candles#",
+      7
+     ],
+     [
+      "Stop too wide: # ATR > # ATR#",
+      3
+     ]
+    ]
+   }
+  }
+ }
+}

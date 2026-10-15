@@ -1,0 +1,119 @@
+[
+ {
+  "fault": "stop buffer on the wrong side",
+  "file": "app/planning/plan.py",
+  "focus_failed": 10,
+  "focus_passed": 7,
+  "existing_swing_failed": 2,
+  "existing_swing_passed": 26,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "reward/risk miscalculated by 10%",
+  "file": "app/planning/plan.py",
+  "focus_failed": 10,
+  "focus_passed": 7,
+  "existing_swing_failed": 1,
+  "existing_swing_passed": 27,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "2:1 minimum reward/risk disabled",
+  "file": "app/planning/plan.py",
+  "focus_failed": 5,
+  "focus_passed": 12,
+  "existing_swing_failed": 4,
+  "existing_swing_passed": 24,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "reward/risk boundary loosened to 1.7",
+  "file": "app/planning/plan.py",
+  "focus_failed": 2,
+  "focus_passed": 15,
+  "existing_swing_failed": 1,
+  "existing_swing_passed": 27,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "look-ahead: forming/future candles kept",
+  "file": "app/swing/context.py",
+  "focus_failed": 9,
+  "focus_passed": 8,
+  "existing_swing_failed": 15,
+  "existing_swing_passed": 13,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "stale/missing-data problems ignored",
+  "file": "app/swing/context.py",
+  "focus_failed": 3,
+  "focus_passed": 14,
+  "existing_swing_failed": 1,
+  "existing_swing_passed": 27,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "S/R reversal accepts a close AT the trigger",
+  "file": "app/swing/sr_reversal.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "trend continuation accepts a close AT the prior low",
+  "file": "app/swing/trend_continuation.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "trend continuation LONG ignores candle colour",
+  "file": "app/swing/trend_continuation.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "consolidation volume threshold lowered 1.3 -> 0.9",
+  "file": "app/swing/config.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "consolidation: one of two volume checks disabled (defence in depth)",
+  "file": "app/swing/consolidation_breakout.py",
+  "focus_failed": 0,
+  "focus_passed": 17,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": false
+ },
+ {
+  "fault": "trend continuation LONG accepts a close AT the prior high",
+  "file": "app/swing/trend_continuation.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ },
+ {
+  "fault": "trend continuation SHORT ignores candle colour",
+  "file": "app/swing/trend_continuation.py",
+  "focus_failed": 1,
+  "focus_passed": 16,
+  "existing_swing_failed": 0,
+  "existing_swing_passed": 28,
+  "detected_by_new_tests": true
+ }
+]

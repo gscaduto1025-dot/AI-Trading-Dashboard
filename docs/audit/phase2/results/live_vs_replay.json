@@ -1,0 +1,26 @@
+{
+ "day": {
+  "evaluated_at": "2026-10-15T15:09:16.294012-04:00",
+  "replay_evaluated_at": "2026-10-15T15:09:16.294012-04:00",
+  "live_setups": 180,
+  "replay_setups": 180,
+  "same_ids": true,
+  "only_live": [],
+  "only_replay": [],
+  "identical": 180,
+  "differing": [],
+  "n_differing": 0
+ },
+ "swing": {
+  "evaluated_at": "2026-10-15T15:09:54.799064-04:00",
+  "replay_evaluated_at": "2026-10-15T15:09:54.799064-04:00",
+  "live_setups": 180,
+  "replay_setups": 180,
+  "same_ids": true,
+  "only_live": [],
+  "only_replay": [],
+  "identical": 180,
+  "differing": [],
+  "n_differing": 0
+ }
+}

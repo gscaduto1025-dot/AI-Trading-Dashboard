@@ -1,0 +1,10 @@
+checked at 2026-10-15T15:02:06-04:00
+SPY: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+QQQ: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+NVDA: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+TSLA: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+AAPL: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+AMD: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+MSFT: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+META: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
+AMZN: 53 bars 09:30-15:00 outside-RTH=0 misaligned=0 strictly-increasing=True gaps=[('12:55', '14:10')] | status freshness=fresh latency=real-time latest_bar_complete=False | newest candle ends -2.9 min before now
