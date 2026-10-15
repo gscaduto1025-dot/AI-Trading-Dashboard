@@ -336,6 +336,8 @@ export interface Alert {
   setup_id: string | null;
   trigger_time: number | null;
   candle_time: string | null;
+  /** The strategy's historical-validation status (setup alerts only). */
+  validation?: StrategyValidation | null;
   feed_status: {
     source: string | null;
     feed: string | null;
@@ -729,6 +731,89 @@ export interface ScannerRow {
   data_freshness: Freshness | "invalid" | null;
   data_as_of: string | null;
   last_candle: string | null;
+  /** The strategy's frozen historical-validation status (not a property of this setup). */
+  validation: StrategyValidation;
+  /** Nearest key-level support/resistance to price (key-level engine). */
+  nearest_level: {
+    side: "support" | "resistance";
+    label: string;
+    low: number;
+    high: number;
+    timeframe: string | null;
+    distance_pct: number | null;
+    distance_atr: number | null;
+    near: boolean;
+    inside: boolean;
+  } | null;
+  /** Consolidated (SIP) average daily dollar volume, last 20 sessions. */
+  liquidity_adv: number | null;
+}
+
+export type ValidationStatus = "VALIDATED_POSITIVE" | "NEGATIVE_HISTORICAL_EVIDENCE" | "INCONCLUSIVE" | "UNVALIDATED";
+
+export interface StrategyValidation {
+  status: ValidationStatus;
+  label: string;
+  notice: string;
+  summary: string;
+  n: number;
+  net_r: number | null;
+  net_ci: [number, number] | null;
+  profit_factor: number | null;
+  gross_r: number | null;
+  timeframe: { timeframe: string; n: number; net_r: number; net_ci: [number, number] | null } | null;
+  baseline: string | null;
+}
+
+export interface ValidationEvidence {
+  n: number;
+  win_rate: number;
+  win_ci: [number, number] | null;
+  exp_r: number;
+  exp_ci: [number, number] | null;
+  pf: number | null;
+  max_dd_r: number;
+  gross_exp_r: number;
+  mean_cost_r: number;
+  verdict: string;
+  cost_sensitivity?: Record<string, { exp_r: number; exp_ci: [number, number] | null; pf: number | null; max_dd_r: number }>;
+}
+
+export interface ResearchValidation {
+  baseline: string | null;
+  frozen_on: string;
+  rules_hash: string;
+  source: string;
+  criteria: Record<ValidationStatus, string>;
+  costs: string;
+  modes: Record<Mode, {
+    sample: string;
+    independence: string;
+    overall: ValidationEvidence;
+    preregistered: {
+      p_two_sided: Record<string, number | null>;
+      p_holm: Record<string, number>;
+      h2_htf_aligned: ValidationEvidence;
+      h3_quality_ge_70: ValidationEvidence;
+    };
+  }>;
+  strategies: Record<string, {
+    mode: Mode;
+    status: ValidationStatus;
+    label: string;
+    summary: string;
+    note: string | null;
+    evidence: ValidationEvidence | null;
+    by_timeframe: Record<string, ValidationEvidence>;
+  }>;
+}
+
+export interface ScannerPreset {
+  id: number;
+  name: string;
+  filters: ScannerFilters;
+  created_at: number;
+  updated_at: number;
 }
 
 export interface ScannerLevel {
@@ -785,6 +870,14 @@ export interface ScannerFilters {
   min_quality?: number;
   strategy?: string;
   include_no_trade?: boolean;
+  /** Comma lists. */
+  signal_state?: string;
+  validation?: string;
+  volume?: string;
+  max_level_atr?: number;
+  max_level_pct?: number;
+  /** Consolidated average daily dollar volume, USD. */
+  min_liquidity?: number;
 }
 
 // ------------------------------------------------------------------ options analysis

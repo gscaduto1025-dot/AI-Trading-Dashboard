@@ -59,6 +59,14 @@ await step("dashboard loads", async () => {
 await step("opportunity scanner", async () => {
   await tab("Opportunity scanner").click();
   await page.getByText(/bullish/i).first().waitFor({ timeout: 60000 });
+  await page.getByText("Strategy evidence").first().waitFor({ timeout: 30000 });
+  await page.screenshot({ path: path.join(outDir, "tradescope-scanner.png"), fullPage: true });
+});
+await step("research tab", async () => {
+  await tab("Research").click();
+  await page.getByText(/Net expectancy per strategy/).first().waitFor({ timeout: 30000 });
+  await page.getByText(/Negative evidence/).first().waitFor();
+  await page.screenshot({ path: path.join(outDir, "tradescope-research.png"), fullPage: true });
 });
 await step("options tab", async () => {
   await tab("Options").click();

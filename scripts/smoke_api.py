@@ -75,7 +75,21 @@ def scanner():
     call("POST", "/api/scanner/run")
     j = call("GET", "/api/scanner")
     assert j["watchlist"] and len(j["tickers"]) == len(j["watchlist"])
+    assert all(r["validation"]["status"] for r in j["rows"])
+    neg = call("GET", "/api/scanner?validation=NEGATIVE_HISTORICAL_EVIDENCE&max_level_atr=2")
+    assert all(r["validation"]["status"] == "NEGATIVE_HISTORICAL_EVIDENCE" for r in neg["rows"])
     return f"{len(j['tickers'])} tickers, {j['total_rows']} rows"
+
+
+def presets_and_research():
+    p = call("POST", "/api/scanner/presets",
+             {"name": "smoke preset", "filters": {"mode": "day", "validation": "INCONCLUSIVE"}})
+    assert any(x["id"] == p["id"] for x in call("GET", "/api/scanner/presets")["presets"])
+    call("DELETE", f"/api/scanner/presets/{p['id']}")
+    r = call("GET", "/api/research/validation")
+    assert r["baseline"] == "rejected-v1" and r["modes"]["day"]["overall"]["n"] > 0
+    statuses = sorted({s["status"] for s in r["strategies"].values()})
+    return f"preset saved/deleted; {len(r['strategies'])} strategies: {', '.join(statuses)}"
 
 
 def alerts():
@@ -133,7 +147,8 @@ def backtest():
 
 
 for name, fn in [("health", health), ("market data", market), ("analysis + levels", analysis),
-                 ("strategies + plans", strategies), ("scanner", scanner), ("alerts", alerts),
+                 ("strategies + plans", strategies), ("scanner", scanner),
+                 ("presets + research", presets_and_research), ("alerts", alerts),
                  ("Claude explanation", ai), ("options", options), ("trade log", journal),
                  ("backtest", backtest)]:
     check(name, fn)

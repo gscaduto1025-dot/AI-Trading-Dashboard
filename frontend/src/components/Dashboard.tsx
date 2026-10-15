@@ -35,6 +35,7 @@ import RecentSetups from "./RecentSetups";
 import PlanSidebar from "./PlanSidebar";
 import StrategyDetail from "./StrategyDetail";
 import BacktestView from "./BacktestView";
+import ResearchView from "./ResearchView";
 import TradeLogView from "./TradeLogView";
 import OptionsView from "./OptionsView";
 import ScannerView from "./ScannerView";
@@ -123,7 +124,7 @@ export default function Dashboard() {
   const [plans, setPlans] = useState<{ key: string; data: PlansResponse | null; error: string | null } | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
   const [unread, setUnread] = useState(0);
-  const [view, setView] = useState<"dashboard" | "scanner" | "options" | "backtest" | "journal">("dashboard");
+  const [view, setView] = useState<"dashboard" | "scanner" | "options" | "backtest" | "journal" | "research">("dashboard");
   const [wlVersion, setWlVersion] = useState(0);
   const [notify, setNotify] = useState(false);
   const [toggles, setToggles] = useState<ChartToggles>({
@@ -510,7 +511,7 @@ export default function Dashboard() {
             ))}
           </div>
           <div className="flex rounded-md bg-panel-2 p-0.5 ring-1 ring-line" role="tablist" aria-label="View">
-            {(["dashboard", "scanner", "options", "backtest", "journal"] as const).map((v) => (
+            {(["dashboard", "scanner", "options", "backtest", "journal", "research"] as const).map((v) => (
               <button
                 key={v}
                 role="tab"
@@ -528,7 +529,9 @@ export default function Dashboard() {
                       ? "Options"
                       : v === "backtest"
                         ? "Backtesting"
-                        : "Trade log"}
+                        : v === "research"
+                          ? "Research"
+                          : "Trade log"}
               </button>
             ))}
           </div>
@@ -563,7 +566,9 @@ export default function Dashboard() {
       )}
 
       {/* Main grid */}
-      {view === "journal" ? (
+      {view === "research" ? (
+        <ResearchView />
+      ) : view === "journal" ? (
         <TradeLogView />
       ) : view === "backtest" ? (
         <BacktestView />

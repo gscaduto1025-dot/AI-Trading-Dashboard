@@ -22,6 +22,8 @@ import type {
   Mode,
   Quote,
   RecordedSetup,
+  ResearchValidation,
+  ScannerPreset,
   SessionKind,
   StrategyEvaluation,
   OptionsAnalysis,
@@ -108,6 +110,15 @@ export const api = {
   strategySetups: () => request<StrategyEvaluation>("/api/strategies/setups"),
   scanner: (f: ScannerFilters) => request<ScannerSnapshot>(`/api/scanner?${q({ ...f })}`),
   scannerRun: () => request<{ scan_id: number }>("/api/scanner/run", { method: "POST" }),
+  presets: () => request<{ presets: ScannerPreset[]; filter_keys: string[] }>("/api/scanner/presets"),
+  savePreset: (name: string, filters: ScannerFilters) =>
+    request<ScannerPreset>("/api/scanner/presets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, filters }),
+    }),
+  deletePreset: (id: number) => request<{ deleted: number }>(`/api/scanner/presets/${id}`, { method: "DELETE" }),
+  researchValidation: () => request<ResearchValidation>("/api/research/validation"),
   addSymbol: (symbol: string) =>
     request<{ watchlist: string[] }>("/api/watchlist", {
       method: "POST",

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { fmtIsoNy, fmtPrice, timeAgo } from "@/lib/format";
+import { VALIDATION_LABEL, validationClasses } from "@/lib/scannerFilters";
 import type { Alert, AlertPrefs, AlertPrefsResponse, AlertSeverity, AlertType, PriceLevel } from "@/lib/types";
 import { Empty, Panel } from "./ui";
 
@@ -74,7 +75,15 @@ function AlertDetail({ a, onOpen }: { a: Alert; onOpen?: (a: Alert) => void }) {
         {a.stop != null && <Row k="Stop-loss">{fmtPrice(a.stop)}</Row>}
         {a.targets.length > 0 && <Row k="Targets">{a.targets.map((t, i) => `T${i + 1} ${fmtPrice(t)}`).join(" · ")}</Row>}
         {a.risk_reward != null && <Row k="Risk/reward">{a.risk_reward.toFixed(2)}:1</Row>}
-        {a.quality != null && <Row k="Quality">{a.quality}/100 (rules score, not a win probability)</Row>}
+        {a.quality != null && <Row k="Setup quality">{a.quality}/100 (technical rules score, not a win probability)</Row>}
+        {a.validation && (
+          <Row k="Strategy evidence">
+            <span className={`rounded px-1 text-[10px] font-bold uppercase ring-1 ${validationClasses(a.validation.status)}`}>
+              {VALIDATION_LABEL[a.validation.status]}
+            </span>{" "}
+            <span className="text-faint">{a.validation.summary}</span>
+          </Row>
+        )}
         <Row k="Timestamp">{fmtIsoNy(a.timestamp)}</Row>
         <Row k="Candle">{fmtIsoNy(a.candle_time)}</Row>
         <Row k="Data feed">
