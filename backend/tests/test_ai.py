@@ -39,7 +39,7 @@ ANALYSIS = {
 }
 
 PLAN = {
-    "strategy_name": "Breakout and retest", "direction": "LONG", "timeframe": "5Min",
+    "strategy": "breakout_retest", "strategy_name": "Breakout and retest", "direction": "LONG", "timeframe": "5Min",
     "status": "WATCHING", "reasons": ["Waiting for a close above 514.30."],
     "entry_trigger": {"price": 514.3, "basis": "5m close above the retest high 514.30"},
     "entry": {"price": 514.3, "basis": "planned at the trigger"},
@@ -68,6 +68,14 @@ def good(f=None, **over) -> dict:
     out = {
         "symbol": "SPY", "trading_mode": "day", "market_bias": "bullish",
         "setup_name": "Breakout and retest (LONG, 5Min)", "setup_status": "WATCHING",
+        "evidence_label": f["strategy_evidence"]["label"],
+        "market_structure": "The higher timeframe is bullish; price sits between the previous "
+                            "day low 508.22 and the daily resistance zone 517.43-525.88.",
+        "risk_reward": "Entry 514.3 with the stop at 512.84 risks 1.46 per share for 3.13 to "
+                       "T1, a 2.14:1 reward/risk against the 2.0 minimum.",
+        "historical_evidence": "Breakout and retest has negative historical evidence: -0.21R "
+                               "per trade over 352 validation trades, so this is a technical "
+                               "setup, not a validated trade.",
         "technical_summary": "This is simulated demo data. Price 513.77 sits above EMA9 513.41 "
                              "and EMA20 513.07 but below VWAP 514.36, with relative volume 1.33.",
         "key_level_explanations": [
@@ -268,9 +276,13 @@ def test_explanation_rejected_when_core_narrative_is_unverifiable():
 def test_request_uses_schema_fact_sheet_and_fallbacks():
     f = facts()
     fake = FakeClient(good(f))
-    data, model = ClaudeAnalyst("claude-opus-5-5", "medium", client=fake).explain_setup(f)
+    ex = ClaudeAnalyst("claude-opus-5-5", "medium", client=fake).explain_setup(f)
+    data, model = ex.data, ex.model
     call = fake.beta.messages.calls[0]
-    assert call["model"] == "claude-opus-5-5" and call["system"] == SYSTEM_PROMPT
+    assert call["model"] == "claude-opus-5-5"
+    assert call["system"] == [{"type": "text", "text": SYSTEM_PROMPT,
+                               "cache_control": {"type": "ephemeral"}}]
+    assert call["max_tokens"] == ClaudeAnalyst.MAX_TOKENS
     assert call["output_config"]["format"] == {"type": "json_schema", "schema": OUTPUT_SCHEMA}
     assert call["output_config"]["effort"] == "medium"
     assert call["fallbacks"] == "default"
@@ -315,7 +327,9 @@ def _echo(kwargs):
     return good(f, technical_summary=f"Price {f['last_price']} is the last close.",
                 key_level_explanations=[], setup_explanation="Explained from the sheet.",
                 bullish_scenario="", bearish_scenario="", entry_conditions=[],
-                invalidation_conditions=[], risk_explanation="Conditions can change.")
+                invalidation_conditions=[], risk_explanation="Conditions can change.",
+                market_structure="Structure from the sheet.", risk_reward="",
+                historical_evidence="", evidence_label="Validated positive")
 
 
 def test_schema_violation_from_claude_is_unavailable_not_shown(service):
@@ -374,3 +388,84 @@ def test_ai_endpoints(service):
         meta = c.post("/api/ai/META", params={"mode": "day"}).json()
         assert meta["facts"]["symbol"] == "META" and meta["status"] == meta["facts"]["setup"]["status"]
         assert c.post("/api/ai/ZZZZ", params={"mode": "day"}).status_code == 400
+
+
+# ------------------------------------------------------------ strategy evidence
+
+def test_fact_sheet_carries_the_strategy_evidence_and_live_entry():
+    f = facts()
+    ev = f["strategy_evidence"]
+    assert ev["label"] == "Negative historical evidence" and ev["validation_trades"] == 352
+    assert ev["net_r_per_trade"] < 0 and ev["net_r_95ci"][1] < 0
+    assert f["live_entry"] is None  # not scanned
+    row = {"signal_state": "HISTORICALLY_TRIGGERED", "actionable": False,
+           "live_checks_failed": ["Trigger at most 3 candles old: 5 candles"],
+           "volume_confirmation": "UNVERIFIED", "liquidity_adv": 2.5e10,
+           "nearest_level": {"side": "resistance", "label": "PDH", "distance_pct": 0.4,
+                             "distance_atr": 0.3, "inside": False}}
+    g = build_facts(copy.deepcopy(ANALYSIS), SETUP, PLAN, "day", True, scanner_row=row)
+    assert g["live_entry"]["signal_state"] == "HISTORICALLY_TRIGGERED"
+    assert g["live_entry"]["checks_failed"] == row["live_checks_failed"]
+    assert facts(plan=None, setup=None)["strategy_evidence"]["label"] == "Unvalidated"
+
+
+def test_evidence_label_is_engine_authority_and_always_present():
+    f = facts()
+    out = validate_explanation(good(f, evidence_label="Validated positive",
+                                    historical_evidence="It returned 9.99R per trade."), f)
+    e, v = out["explanation"], out["validation"]
+    assert e["evidence_label"] == "Negative historical evidence"
+    assert any("evidence_label" in c for c in v["corrections"])
+    # The invented number was removed, so the registry's own text is shown instead.
+    assert "352 validation trades" in e["historical_evidence"]
+    assert "not a recommended trade" in e["historical_evidence"]
+
+
+def test_claims_of_a_profitable_or_proven_edge_are_removed():
+    f = facts()
+    out = validate_explanation(good(f, setup_explanation="This is a proven, profitable "
+                                                         "pattern. The plan needs a close "
+                                                         "above 514.30.",
+                                    risk_explanation="The strategy is not validated. Price "
+                                                     "is below VWAP."), f)
+    e = out["explanation"]
+    assert e["setup_explanation"] == "The plan needs a close above 514.30."
+    assert e["risk_explanation"].startswith("The strategy is not validated.")  # negated: kept
+    assert any("claims an edge" in r["reason"] for r in out["validation"]["removed"])
+
+
+# ------------------------------------------------------------------ cost controls
+
+def test_budget_limits_block_calls_and_usage_is_recorded(service, monkeypatch):
+    from app.ai import budget
+    fake = FakeClient(_echo)
+    service.analyst = ClaudeAnalyst("claude-opus-5-5", client=fake)
+    service.ai_enabled = True
+    service.ai_limits = budget.Limits(per_minute=1, per_day=10, daily_cost_usd=5)
+    assert service.ai_explanation("SPY", "day")["available"] is True
+    r = service.ai_explanation("SPY", "day", refresh=True)  # second call within a minute
+    assert r["available"] is False and r["budget_blocked"] and "per minute" in r["reason"]
+    assert len(fake.beta.messages.calls) == 1 and r["facts"]  # analysis kept, no API call
+    service.ai_limits = budget.Limits(per_minute=10, per_day=1, daily_cost_usd=5)
+    assert "Daily Claude call limit" in service.ai_explanation("SPY", "day", refresh=True)["reason"]
+    service.ai_limits = budget.Limits(per_minute=10, per_day=10, daily_cost_usd=0)
+    assert "spend limit" in service.ai_explanation("SPY", "day", refresh=True)["reason"]
+    # Cached answers are free and never blocked.
+    assert service.ai_explanation("SPY", "day")["cached"] is True
+    day = service.db.ai_usage_since(budget.day_start())
+    assert day["calls"] == 1
+
+
+def test_cost_estimate_and_usage_endpoint(service):
+    from app.ai import budget
+    u = {"input_tokens": 6000, "output_tokens": 2000, "cache_read_input_tokens": 1000,
+         "cache_creation_input_tokens": 0}
+    assert budget.estimate_cost("claude-opus-5-5", u) == round((6000 * 4 + 2000 * 20
+                                                                + 1000 * 0.2) / 1e6, 6)
+    assert budget.estimate_cost("unknown-model", u) is None
+    service.db.record_ai_usage("SPY", "day", "claude-opus-5-5", "ok", u, 0.0642)
+    with TestClient(create_app(service, run_scanner=False)) as c:
+        j = c.get("/api/ai/usage").json()
+    assert j["today"]["calls"] >= 1 and j["today"]["cost_usd"] >= 0.0642
+    assert j["limits"]["per_day"] > 0 and "claude-opus-5-5" in j["prices_usd_per_mtok"]
+    assert "key" not in json.dumps(j).lower().replace("_key", "")  # no credentials echoed

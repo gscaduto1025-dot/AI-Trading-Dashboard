@@ -202,7 +202,24 @@ export interface Analysis {
 }
 
 /** Deterministic fact sheet the AI explanation is checked against (backend app/ai/facts.py). */
+export interface AIStrategyEvidence {
+  label: string;
+  status: ValidationStatus;
+  summary: string;
+  notice: string;
+  validation_trades?: number | null;
+  net_r_per_trade?: number | null;
+  net_r_95ci?: [number, number] | null;
+}
+
 export interface AIFacts {
+  strategy_evidence: AIStrategyEvidence;
+  live_entry: {
+    signal_state: string | null;
+    actionable_now: boolean | null;
+    checks_failed: string[];
+    volume_confirmation: string | null;
+  } | null;
   symbol: string;
   trading_mode: Mode;
   chart_timeframe: string;
@@ -231,7 +248,11 @@ export interface AIExplanation {
   market_bias: "bullish" | "bearish" | "neutral";
   setup_name: string;
   setup_status: StrategyStatus;
+  evidence_label: string;
   technical_summary: string;
+  market_structure: string;
+  risk_reward: string;
+  historical_evidence: string;
   key_level_explanations: { level: string; explanation: string }[];
   setup_explanation: string;
   bullish_scenario: string;
@@ -263,6 +284,9 @@ export interface AIResponse {
   model?: string;
   generated_at?: string;
   is_demo?: boolean;
+  budget_blocked?: boolean;
+  estimated_cost_usd?: number | null;
+  usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number };
 }
 
 export interface RecordedSetup {

@@ -21,6 +21,7 @@ frontend proxies `/api/*` to it. No route places orders.
 | GET | `/api/history/{symbol}?timeframe=1Day&start=2024-01-01&end=2024-12-31[&format=csv]` | full paginated history for backtesting (naive times = New York) |
 | GET | `/api/analysis/{symbol}?mode=day&timeframe=5Min` | bias, levels, setup, checklist, overlays |
 | GET | `/api/ai/{symbol}?mode=day\|swing[&setup_id=]` | cached Claude explanation + verified fact sheet (never calls Claude) |
+| GET | `/api/ai/usage` | Claude calls and estimated spend today against the limits (`CLAUDE_MAX_CALLS_PER_MINUTE`, `CLAUDE_MAX_CALLS_PER_DAY`, `CLAUDE_MAX_DAILY_COST_USD`); never returns the key |
 | POST | `/api/ai/{symbol}?mode=day\|swing[&setup_id=&refresh=true]` | generate (or return cached) validated Claude explanation |
 | GET | `/api/scanner[?mode=&side=&status=&min_rr=&min_quality=&strategy=&include_no_trade=&signal_state=&validation=&volume=&max_level_atr=&max_level_pct=&min_liquidity=]` | latest opportunity-scanner snapshot (server-side, filtered). Comma lists: `signal_state` (CURRENTLY_ACTIONABLE, HISTORICALLY_TRIGGERED, WATCHING, NO_TRADE), `validation` (VALIDATED_POSITIVE, NEGATIVE_HISTORICAL_EVIDENCE, INCONCLUSIVE, UNVALIDATED), `volume` (FULL, LIMITED, UNVERIFIED, UNAVAILABLE, NOT_REQUIRED). Each row carries `validation`, `nearest_level` and `liquidity_adv`. |
 | GET · POST | `/api/scanner/presets` | list presets / save `{"name", "filters"}` (overwrites by name; `filters` = scanner query parameters) |

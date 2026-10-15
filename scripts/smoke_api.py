@@ -22,7 +22,9 @@ def call(method: str, path: str, body=None, expect=(200,)):
     req = urllib.request.Request(BASE + path, data=data, method=method,
                                  headers={"Content-Type": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=120) as r:
+        # 300 s: the first strategy evaluation on a fresh backend downloads every
+        # intraday series (measured 107 s at the market open on the free feed).
+        with urllib.request.urlopen(req, timeout=300) as r:
             status, raw = r.status, r.read()
     except urllib.error.HTTPError as e:
         status, raw = e.code, e.read()

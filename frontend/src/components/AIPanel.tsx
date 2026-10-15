@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ApiError, api } from "@/lib/api";
 import { STATUS_LABEL, fmtPrice, statusClasses } from "@/lib/format";
+import { VALIDATION_LABEL, validationClasses } from "@/lib/scannerFilters";
 import type { AIResponse, Mode } from "@/lib/types";
 import { DemoTag, Panel, Skeleton } from "./ui";
 
@@ -13,9 +14,10 @@ type Entry = { key: string; phase: "loading" | "generating" | "done"; data: AIRe
 
 function readAuto(): boolean {
   try {
-    return window.localStorage.getItem(AUTO_KEY) !== "off";
+    // Opt-in: auto-explain spends API calls as you browse, so it is off unless enabled.
+    return window.localStorage.getItem(AUTO_KEY) === "on";
   } catch {
-    return true;
+    return false;
   }
 }
 
@@ -69,7 +71,7 @@ export default function AIPanel({
 }) {
   const key = `${symbol}|${mode}|${setupId ?? "best"}|${dataKey}`;
   const [entry, setEntry] = useState<Entry | null>(null);
-  const [auto, setAuto] = useState<boolean>(true);
+  const [auto, setAuto] = useState<boolean>(false);
   const current = useRef(key);
 
   useEffect(() => {
@@ -178,7 +180,18 @@ export default function AIPanel({
                   bias <span className={BIAS_CLS[facts.market_bias.label]}>{facts.market_bias.label}</span>
                 </span>
                 <span className="num text-muted">last {fmtPrice(facts.last_price)}</span>
+                <span
+                  className={`rounded px-1.5 py-px text-[9px] font-bold uppercase ring-1 ${validationClasses(facts.strategy_evidence.status)}`}
+                  title={`${facts.strategy_evidence.summary} ${facts.strategy_evidence.notice}`}
+                >
+                  {VALIDATION_LABEL[facts.strategy_evidence.status]}
+                </span>
               </div>
+              {facts.live_entry?.signal_state === "HISTORICALLY_TRIGGERED" && (
+                <p className="rounded bg-wait/10 px-2 py-1 text-[10.5px] text-wait">
+                  Triggered earlier, not a fresh entry now: {facts.live_entry.checks_failed.join("; ")}
+                </p>
+              )}
               <p className="text-[10px] text-faint">
                 {facts.symbol} · {facts.trading_mode} trading · data as of{" "}
                 {new Date(facts.data_timestamp).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })} ET · {facts.data_source}
@@ -188,6 +201,9 @@ export default function AIPanel({
                 <>
                   <Section title="Technical summary">
                     <Para text={ex.technical_summary} />
+                  </Section>
+                  <Section title="Market structure">
+                    <Para text={ex.market_structure} />
                   </Section>
                   {ex.key_level_explanations.length > 0 && (
                     <Section title="Key levels">
@@ -201,7 +217,7 @@ export default function AIPanel({
                       </ul>
                     </Section>
                   )}
-                  <Section title="Setup explanation">
+                  <Section title="Why the setup exists">
                     <Para text={ex.setup_explanation} />
                   </Section>
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -212,13 +228,21 @@ export default function AIPanel({
                       <Para text={ex.bearish_scenario} />
                     </Section>
                   </div>
-                  <Section title="Entry conditions">
+                  <Section title="What confirms it (entry conditions)">
                     <Bullets items={ex.entry_conditions} dot="bg-accent" />
                   </Section>
-                  <Section title="Invalidation">
+                  <Section title="What invalidates it">
                     <Bullets items={ex.invalidation_conditions} dot="bg-bear" />
                   </Section>
-                  <Section title="Risk analysis">
+                  <Section title="Risk / reward">
+                    <Para text={ex.risk_reward} />
+                  </Section>
+                  <Section title="Historical strategy evidence">
+                    <div className={`rounded-md px-2 py-1.5 ring-1 ${validationClasses(facts.strategy_evidence.status)}`}>
+                      <Para text={ex.historical_evidence} />
+                    </div>
+                  </Section>
+                  <Section title="Risks and conflicting evidence">
                     <Para text={ex.risk_explanation} />
                   </Section>
                   {data?.validation && (
@@ -250,6 +274,7 @@ export default function AIPanel({
                         Status and levels come from the deterministic engines; Claude only explains them.
                         {data.model && ` ${data.cached ? "Cached" : "Generated"} by ${data.model}`}
                         {data.generated_at && ` at ${new Date(data.generated_at).toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" })} ET`}
+                        {!data.cached && data.estimated_cost_usd != null && ` (est. $${data.estimated_cost_usd.toFixed(4)})`}
                         . Educational analysis, not financial advice.
                       </p>
                     </div>
@@ -263,7 +288,7 @@ export default function AIPanel({
                     ) : data?.not_generated ? (
                       <p>
                         No explanation for the current data yet.{" "}
-                        {auto ? "Generating automatically…" : "Press “Explain with Claude” to generate one."}
+                        {auto ? "Generating automatically…" : "Press “Explain with Claude” to generate one (one API call; cached for the same data)."}
                       </p>
                     ) : (
                       <>

@@ -131,6 +131,21 @@ CREATE TABLE IF NOT EXISTS scanner_presets (
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
+-- One row per Claude API call (cost controls and reporting; never the API key).
+CREATE TABLE IF NOT EXISTS ai_usage (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    called_at INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    model TEXT,
+    outcome TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cost_usd REAL
+);
+CREATE INDEX IF NOT EXISTS ai_usage_time ON ai_usage (called_at);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -523,6 +538,36 @@ class Database:
         with self._lock, self._conn:
             return self._conn.execute("DELETE FROM scanner_presets WHERE id=?",
                                       (preset_id,)).rowcount > 0
+
+    # ----------------------------------------------------------------- AI usage
+
+    def record_ai_usage(self, symbol: str, mode: str, model: str | None, outcome: str,
+                        usage: dict | None, cost_usd: float | None) -> None:
+        u = usage or {}
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO ai_usage (called_at, symbol, mode, model, outcome, input_tokens,
+                   output_tokens, cache_read_tokens, cache_write_tokens, cost_usd)
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (int(time.time()), symbol, mode, model, outcome, u.get("input_tokens", 0),
+                 u.get("output_tokens", 0), u.get("cache_read_input_tokens", 0),
+                 u.get("cache_creation_input_tokens", 0), cost_usd))
+
+    def ai_usage_since(self, since: int) -> dict:
+        with self._lock:
+            r = self._conn.execute(
+                """SELECT COUNT(*) AS calls, COALESCE(SUM(cost_usd), 0) AS cost,
+                   COALESCE(SUM(input_tokens), 0) AS inp, COALESCE(SUM(output_tokens), 0) AS outp,
+                   COALESCE(SUM(cache_read_tokens), 0) AS cr
+                   FROM ai_usage WHERE called_at >= ?""", (since,)).fetchone()
+        return {"calls": r["calls"], "cost_usd": round(r["cost"], 6), "input_tokens": r["inp"],
+                "output_tokens": r["outp"], "cache_read_tokens": r["cr"]}
+
+    def ai_usage_recent(self, limit: int = 10) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM ai_usage ORDER BY id DESC LIMIT ?",
+                                      (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     def get_ai(self, cache_key: str) -> dict | None:
         with self._lock:

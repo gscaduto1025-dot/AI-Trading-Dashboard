@@ -13,8 +13,9 @@ import json
 from datetime import datetime
 
 from ..market.calendar import NY
+from ..validation import for_strategy
 
-FACTS_VERSION = "3"  # bump when the sheet layout or the prompt changes (cache key)
+FACTS_VERSION = "4"  # bump when the sheet layout or the prompt changes (cache key)
 
 
 def _iso(ts: int | None) -> str | None:
@@ -65,9 +66,47 @@ def _ma_alignment(price: float, ind: dict, mode: str) -> dict:
     return out
 
 
+def _evidence(v: dict | None) -> dict:
+    if not v:
+        return {"label": "Unvalidated", "status": "UNVALIDATED",
+                "summary": "No strategy is selected, so there is no historical evidence.",
+                "notice": "Technical analysis only."}
+    out = {"label": v["label"], "status": v["status"], "summary": v["summary"],
+           "notice": v["notice"], "validation_trades": v.get("n"),
+           "net_r_per_trade": v.get("net_r"), "net_r_95ci": v.get("net_ci"),
+           "profit_factor": v.get("profit_factor"),
+           "gross_r_per_trade_before_costs": v.get("gross_r"),
+           "baseline": v.get("baseline")}
+    if v.get("timeframe"):
+        t = v["timeframe"]
+        out["this_timeframe"] = {"timeframe": t["timeframe"], "trades": t["n"],
+                                 "net_r_per_trade": t["net_r"], "net_r_95ci": t["net_ci"]}
+    return out
+
+
+def _live_entry(row: dict | None) -> dict | None:
+    """The scanner's live entry state for the setup (same row the scanner shows)."""
+    if not row:
+        return None
+    lv = row.get("nearest_level") or {}
+    return {"signal_state": row.get("signal_state"), "actionable_now": row.get("actionable"),
+            "checks_failed": row.get("live_checks_failed") or [],
+            "live_price": row.get("live_price"),
+            "live_risk_reward": row.get("live_risk_reward"),
+            "volume_confirmation": row.get("volume_confirmation"),
+            "nearest_key_level": ({k: lv.get(k) for k in ("side", "label", "distance_pct",
+                                                          "distance_atr", "inside")}
+                                  if lv else None),
+            "liquidity_avg_daily_dollar_volume": row.get("liquidity_adv"),
+            "data_freshness": row.get("data_freshness")}
+
+
 def build_facts(analysis: dict, setup: dict | None, plan: dict | None, mode: str,
-                is_demo: bool) -> dict:
-    """Assemble the deterministic sheet for one symbol/mode and (optionally) one setup."""
+                is_demo: bool, evidence: dict | None = None,
+                scanner_row: dict | None = None) -> dict:
+    """Assemble the deterministic sheet for one symbol/mode and (optionally) one setup.
+    `evidence` = the strategy's validation block (app.validation.for_strategy);
+    `scanner_row` = the scanner's row for this setup (live entry state), if scanned."""
     price = analysis["price"]
     ind = analysis.get("indicators") or {}
     bias = analysis.get("bias") or {}
@@ -103,6 +142,9 @@ def build_facts(analysis: dict, setup: dict | None, plan: dict | None, mode: str
         "nearest_support": supports[0] if supports else None,
         "nearest_resistance": resistances[0] if resistances else None,
         "setup": None,
+        "strategy_evidence": _evidence(None if setup is None else evidence or for_strategy(
+            (plan or {}).get("strategy") or "", (plan or {}).get("timeframe"))),
+        "live_entry": _live_entry(scanner_row),
     }
     if setup is not None and plan is not None:
         price_of = lambda k: (None if not plan.get(k) else
@@ -152,6 +194,10 @@ def build_facts(analysis: dict, setup: dict | None, plan: dict | None, mode: str
 
 def engine_status(facts: dict) -> str:
     return facts["setup"]["status"] if facts.get("setup") else "NO_TRADE"
+
+
+def engine_evidence(facts: dict) -> dict:
+    return facts.get("strategy_evidence") or _evidence(None)
 
 
 def engine_setup_name(facts: dict) -> str:

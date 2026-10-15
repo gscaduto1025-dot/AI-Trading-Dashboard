@@ -17,7 +17,7 @@ from __future__ import annotations
 import math
 import re
 
-from .facts import engine_setup_name, engine_status
+from .facts import engine_evidence, engine_setup_name, engine_status
 
 BIAS = ["bullish", "bearish", "neutral"]
 STATUSES = ["TRIGGERED", "WATCHING", "NO_TRADE"]
@@ -30,7 +30,9 @@ OUTPUT_SCHEMA = {
         "market_bias": {"type": "string", "enum": BIAS},
         "setup_name": {"type": "string"},
         "setup_status": {"type": "string", "enum": STATUSES},
+        "evidence_label": {"type": "string"},
         "technical_summary": {"type": "string"},
+        "market_structure": {"type": "string"},
         "key_level_explanations": {
             "type": "array",
             "items": {"type": "object",
@@ -43,18 +45,21 @@ OUTPUT_SCHEMA = {
         "bearish_scenario": {"type": "string"},
         "entry_conditions": {"type": "array", "items": {"type": "string"}},
         "invalidation_conditions": {"type": "array", "items": {"type": "string"}},
+        "risk_reward": {"type": "string"},
+        "historical_evidence": {"type": "string"},
         "risk_explanation": {"type": "string"},
         "data_timestamp": {"type": "string"},
     },
     "required": ["symbol", "trading_mode", "market_bias", "setup_name", "setup_status",
-                 "technical_summary", "key_level_explanations", "setup_explanation",
-                 "bullish_scenario", "bearish_scenario", "entry_conditions",
-                 "invalidation_conditions", "risk_explanation", "data_timestamp"],
+                 "evidence_label", "technical_summary", "market_structure",
+                 "key_level_explanations", "setup_explanation", "bullish_scenario",
+                 "bearish_scenario", "entry_conditions", "invalidation_conditions",
+                 "risk_reward", "historical_evidence", "risk_explanation", "data_timestamp"],
     "additionalProperties": False,
 }
 
-TEXT_FIELDS = ["technical_summary", "setup_explanation", "bullish_scenario",
-               "bearish_scenario", "risk_explanation"]
+TEXT_FIELDS = ["technical_summary", "market_structure", "setup_explanation", "bullish_scenario",
+               "bearish_scenario", "risk_reward", "historical_evidence", "risk_explanation"]
 LIST_FIELDS = ["entry_conditions", "invalidation_conditions"]
 CORE_FIELDS = ["technical_summary", "setup_explanation", "risk_explanation"]
 
@@ -191,6 +196,24 @@ def _clean_text(field: str, text: str, nums: list[float], report: dict) -> str:
     return " ".join(kept)
 
 
+EDGE_CLAIM = re.compile(r"\b(profitable|proven|(?:has|have|with) (?:an|a real|a statistical) "
+                        r"edge|validated (?:strategy|edge|trade))\b", re.I)
+NEGATION = re.compile(r"\b(not|no|never|unvalidated|lack\w*|without|cannot|isn't|aren't)\b",
+                      re.I)
+
+
+def _drop_edge_claims(field: str, text: str, report: dict) -> str:
+    """Remove sentences that claim a profitable/validated edge (only the registry can)."""
+    kept = []
+    for sentence in [x for x in _SENT.split(text.strip()) if x.strip()]:
+        if EDGE_CLAIM.search(sentence) and not NEGATION.search(sentence):
+            report["removed"].append({"field": field, "text": sentence, "reason":
+                                      "claims an edge the historical evidence does not support"})
+            continue
+        kept.append(sentence.strip())
+    return " ".join(kept)
+
+
 def validate_explanation(data, facts: dict) -> dict:
     """Return {"explanation": cleaned, "validation": report}; raise ExplanationInvalid when
     the schema is violated or the core narrative cannot be verified."""
@@ -205,11 +228,12 @@ def validate_explanation(data, facts: dict) -> dict:
         "symbol": facts["symbol"], "trading_mode": facts["trading_mode"],
         "setup_name": engine_setup_name(facts), "setup_status": engine_status(facts),
         "market_bias": facts["market_bias"]["label"],
+        "evidence_label": engine_evidence(facts)["label"],
         "data_timestamp": facts["data_timestamp"],
     }
     for k, v in engine.items():
         if out.get(k) != v:
-            if k in ("setup_status", "market_bias", "symbol", "trading_mode"):
+            if k in ("setup_status", "market_bias", "symbol", "trading_mode", "evidence_label"):
                 report["corrections"].append(
                     f"{k}: Claude wrote {out.get(k)!r}; the engine value {v!r} is used")
             out[k] = v
@@ -230,6 +254,16 @@ def validate_explanation(data, facts: dict) -> dict:
         if text:
             levels.append({"level": item["level"], "explanation": text})
     out["key_level_explanations"] = levels
+    ev = engine_evidence(facts)
+    if ev["status"] != "VALIDATED_POSITIVE":
+        for f in TEXT_FIELDS:
+            out[f] = _drop_edge_claims(f, out[f], report)
+        for f in LIST_FIELDS:
+            out[f] = [c for c in (_drop_edge_claims(f, x, report) for x in out[f]) if c]
+    if not out["historical_evidence"]:
+        # The evidence must always be shown: fall back to the registry's own wording.
+        out["historical_evidence"] = f"{ev['label']}: {ev['summary']} {ev['notice']}"
+        report["corrections"].append("historical_evidence: replaced with the registry text")
     empty = [f for f in CORE_FIELDS if not out[f]]
     if empty:
         raise ExplanationInvalid(f"Nothing verifiable remained in {', '.join(empty)} after "

@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from .ai import budget as ai_budget
 from .ai.claude import AIUnavailable, ClaudeAnalyst
 from .ai.facts import build_facts, cache_key as ai_cache_key, engine_status
 from .ai.validate import ExplanationInvalid, validate_explanation
@@ -48,7 +49,8 @@ from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
-from .validation import STATUSES as VALIDATION_STATUSES, registry as validation_registry
+from .validation import (STATUSES as VALIDATION_STATUSES, for_strategy as validation_for,
+                         registry as validation_registry)
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
 from .strategies.volume import VolumeSource
@@ -87,6 +89,7 @@ class Service:
         self.db = db or Database(settings.database_path)
         self.analyst = analyst or ClaudeAnalyst(settings.claude_model, settings.claude_effort)
         self.ai_enabled = settings.anthropic_api_key_present or analyst is not None
+        self.ai_limits = ai_budget.Limits.from_env()
         self.last_scan: int | None = None
         self.strategy_config: StrategyConfig = load_strategy_config()
         self._strategy_cache: dict[tuple, list[dict]] = {}
@@ -512,7 +515,9 @@ class Service:
         except AnalysisBlocked as exc:
             return {"available": False, "facts": None, "status": "NO_TRADE",
                     "reason": f"Analysis paused: {exc.message}"}
-        facts = build_facts(analysis, setup, plan, mode, self.is_demo)
+        evidence = validation_for(plan["strategy"], plan["timeframe"]) if plan else None
+        facts = build_facts(analysis, setup, plan, mode, self.is_demo, evidence,
+                            self._scanner_row(setup["id"]) if setup else None)
         base = {"facts": facts, "status": engine_status(facts),
                 "setup_id": setup["id"] if setup else None, "is_demo": self.is_demo}
         if not self.ai_enabled:
@@ -528,21 +533,36 @@ class Service:
         with self._ai_locks.setdefault(key, threading.Lock()):
             if not refresh and (cached := self.db.get_ai(key)):  # filled while we waited
                 return {**base, "available": True, "cached": True, **cached}
+            blocked = ai_budget.check(self.db, self.ai_limits)
+            if blocked:
+                return {**base, "available": False, "budget_blocked": True,
+                        "reason": f"AI explanation not generated: {blocked}"}
             try:
-                raw, model = self.analyst.explain_setup(facts)
-                checked = validate_explanation(raw, facts)
+                ex = self.analyst.explain_setup(facts)
             except AIUnavailable as exc:
+                self.db.record_ai_usage(symbol, mode, self.analyst.model, "error", None, None)
                 return {**base, "available": False,
                         "reason": f"AI explanation unavailable: {exc}"}
+            cost = ai_budget.estimate_cost(ex.model, ex.usage)
+            try:
+                checked = validate_explanation(ex.data, facts)
             except ExplanationInvalid as exc:
+                self.db.record_ai_usage(symbol, mode, ex.model, "rejected", ex.usage, cost)
                 log.warning("Claude explanation rejected for %s %s: %s", symbol, mode, exc)
                 return {**base, "available": False,
                         "reason": f"AI explanation unavailable: the response failed "
                                   f"validation ({exc})"}
-            result = {**checked, "model": model,
+            self.db.record_ai_usage(symbol, mode, ex.model, "ok", ex.usage, cost)
+            result = {**checked, "model": ex.model, "usage": ex.usage,
+                      "estimated_cost_usd": cost,
                       "generated_at": datetime.now(NY).isoformat(timespec="seconds")}
             self.db.put_ai(key, result)
         return {**base, "available": True, "cached": False, **result}
+
+    def _scanner_row(self, setup_id: str) -> dict | None:
+        """The latest scanner row for a setup (live entry state), without rescanning."""
+        snap = self.scanner.snapshot or {}
+        return next((r for r in snap.get("setup_states") or [] if r["id"] == setup_id), None)
 
     def scan(self) -> dict:
         """Run the opportunity scanner now (also records alerts and the recent-setups
@@ -978,6 +998,13 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
         except InsufficientData as exc:
             raise HTTPException(503, {"code": "INSUFFICIENT_DATA", "message": str(exc),
                                       "display": "ANALYSIS PAUSED"}) from exc
+
+    @app.get("/api/ai/usage")
+    def ai_usage() -> dict:
+        """Claude calls and estimated spend today, against the configured limits."""
+        s = svc()
+        return {"ai_enabled": s.ai_enabled, "model": s.analyst.model,
+                "effort": s.analyst.effort, **ai_budget.summary(s.db, s.ai_limits)}
 
     @app.get("/api/ai/{symbol}")
     def ai_cached(symbol: str, mode: str = "day", setup_id: str | None = None) -> dict:

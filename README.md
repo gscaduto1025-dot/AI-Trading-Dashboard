@@ -198,6 +198,16 @@ Every feature is a tab or panel of the dashboard, backed by the API.
     are removed;
   - explanations are cached;
   - on failure the panel says "AI explanation unavailable" and the analysis stays.
+  - the fact sheet includes the strategy's historical-evidence label and the scanner's live
+    entry state. Claude must restate the evidence, may not claim an edge, and the validator
+    enforces the label and the status;
+  - sections: summary, market structure, why the setup exists, key levels, bullish and
+    bearish scenarios, what confirms it, what invalidates it, risk/reward, historical
+    evidence, and risks;
+  - cost controls: calls only on request (auto-explain is opt-in), a cache keyed by the facts,
+    per-minute, per-day and daily-spend caps, and per-call token and cost logging
+    (`GET /api/ai/usage`);
+  - live check: `backend/.venv/bin/python scripts/ai_live_check.py`.
 - **Options** (`app/options`):
   - Alpaca option chains and contracts: bid/ask, volume, open interest, IV and Greeks;
   - calls for long setups and puts for short setups;
