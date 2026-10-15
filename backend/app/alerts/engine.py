@@ -212,12 +212,17 @@ class _Run:
             "volume_confirmation": r.get("volume_confirmation"),
             "live_price": r.get("live_price"), "live_risk_reward": r.get("live_risk_reward"),
             "entry_checks": r.get("entry_checks") or [],
+            "validation": r.get("validation"),
         })
         return a
 
     def _emit(self, alert: dict, dedupe: str, cooldown_key: str) -> None:
         if alert["is_demo"]:
             alert["title"] = "[DEMO] " + alert["title"]
+        v = alert.get("validation")
+        if v and v.get("status") != "VALIDATED_POSITIVE":
+            alert["message"] = (f"{alert['message']} [Strategy evidence: {v['label']}. "
+                                f"Technical setup, not a validated trade.]").strip()
         self.candidates.append((alert, dedupe, cooldown_key))
 
     def skip(self, r: dict, reason: str) -> None:

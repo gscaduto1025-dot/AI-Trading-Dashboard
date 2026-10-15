@@ -26,6 +26,7 @@ from ..market.calendar import NY
 from ..strategies.entry import (CURRENTLY_ACTIONABLE, HISTORICALLY_TRIGGERED,  # noqa: F401
                                 entry_checks, entry_env_at)
 from ..strategies.volume import volume_confirmation
+from ..validation import for_strategy
 
 log = logging.getLogger("tradescope.scanner")
 
@@ -140,6 +141,23 @@ def setup_row(s: dict, mode: str, price: float | None, bias: str | None,
     }
 
 
+def annotate_row(row: dict, info: dict, mode: str) -> dict:
+    """Context added to a row after setup_row(): the strategy's historical validation
+    status, the nearest key level (key-level engine, same ATR basis as the ticker card)
+    and the ticker's consolidated liquidity. Presentation only; no rule is applied."""
+    row["validation"] = for_strategy(row["strategy"], row["timeframe"])
+    lv = (info.get("levels") or {}).get(mode) or {}
+    near = [dict(v, side=k) for k, v in lv.items() if v]
+    best = min(near, key=lambda v: v["distance"], default=None)
+    row["nearest_level"] = ({k: best.get(k) for k in ("side", "label", "low", "high",
+                                                       "timeframe", "distance_pct",
+                                                       "distance_atr", "near", "inside")}
+                            if best else None)
+    liq = info.get("liquidity") or {}
+    row["liquidity_adv"] = liq.get("adv")
+    return row
+
+
 def include_row(s: dict) -> bool:
     """Detected setups only: active ones, and patterns that were found but fail a
     requirement (they have an objective trigger). Plain 'no pattern' rows are dropped."""
@@ -155,14 +173,26 @@ def rank_key(r: dict):
             r["ticker"], r["mode"], r["setup"], r["direction"])
 
 
+def _set(v: str | None) -> set[str] | None:
+    return {x.strip().upper() for x in v.split(",") if x.strip()} if v else None
+
+
 def filter_rows(rows: list[dict], *, mode: str | None = None, side: str | None = None,
                 status: str | None = None, min_rr: float | None = None,
                 min_quality: float | None = None, strategy: str | None = None,
-                include_no_trade: bool = True) -> list[dict]:
+                include_no_trade: bool = True, signal_state: str | None = None,
+                validation: str | None = None, volume: str | None = None,
+                max_level_atr: float | None = None, max_level_pct: float | None = None,
+                min_liquidity: float | None = None) -> list[dict]:
     """Scanner filters. `side`: bullish|bearish. `status`: TRIGGERED|WATCHING|NO_TRADE
     (comma list allowed). `strategy`: a strategy id or a setup family (breakout, retest,
-    pullback, reversal)."""
-    statuses = {x.strip().upper() for x in status.split(",")} if status else None
+    pullback, reversal). Comma lists: `signal_state` (CURRENTLY_ACTIONABLE,
+    HISTORICALLY_TRIGGERED, WATCHING, NO_TRADE), `validation` (registry statuses),
+    `volume` (FULL, LIMITED, UNVERIFIED, UNAVAILABLE, NOT_REQUIRED). `max_level_atr` /
+    `max_level_pct`: nearest key level within this distance (ATRs / % of price).
+    `min_liquidity`: consolidated average daily dollar volume."""
+    statuses = _set(status)
+    states, vals, vols = _set(signal_state), _set(validation), _set(volume)
     out = []
     for r in rows:
         if mode and r["mode"] != mode:
@@ -178,6 +208,22 @@ def filter_rows(rows: list[dict], *, mode: str | None = None, side: str | None =
         if min_quality is not None and (r["quality"] is None or r["quality"] < min_quality):
             continue
         if strategy and strategy not in (r["strategy"], r["pattern"]):
+            continue
+        if states and r["signal_state"] not in states:
+            continue
+        if vals and (r.get("validation") or {}).get("status") not in vals:
+            continue
+        if vols and r["volume_confirmation"] not in vols:
+            continue
+        lv = r.get("nearest_level") or {}
+        if max_level_atr is not None and (lv.get("distance_atr") is None
+                                          or lv["distance_atr"] > max_level_atr):
+            continue
+        if max_level_pct is not None and (lv.get("distance_pct") is None
+                                          or lv["distance_pct"] > max_level_pct):
+            continue
+        if min_liquidity is not None and (r.get("liquidity_adv") is None
+                                          or r["liquidity_adv"] < min_liquidity):
             continue
         out.append(r)
     return out
@@ -345,8 +391,9 @@ class OpportunityScanner:
                 for s in engine[mode]["setups"]:
                     if s["ticker"] != sym:
                         continue
-                    row = setup_row(s, mode, info["price"], info["bias"].get(mode), data,
-                                    live_quote(q), env)
+                    row = annotate_row(setup_row(s, mode, info["price"],
+                                                 info["bias"].get(mode), data,
+                                                 live_quote(q), env), info, mode)
                     states.append(row)  # every evaluated setup, for the alert engine
                     if not include_row(s):
                         continue

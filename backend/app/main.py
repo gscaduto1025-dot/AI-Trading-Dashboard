@@ -48,6 +48,7 @@ from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
+from .validation import STATUSES as VALIDATION_STATUSES, registry as validation_registry
 from .swing.config import SwingConfig, load_swing_config
 from .swing.context import fmt_day
 from .strategies.volume import VolumeSource
@@ -721,6 +722,26 @@ def _parse_dt(value: str) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=NY)  # naive inputs are New York time
 
 
+PRESET_KEYS = {"mode", "side", "status", "min_rr", "min_quality", "strategy",
+               "include_no_trade", "signal_state", "validation", "volume", "max_level_atr",
+               "max_level_pct", "min_liquidity"}
+CHOICES = {"signal_state": {"CURRENTLY_ACTIONABLE", "HISTORICALLY_TRIGGERED", "WATCHING",
+                            "NO_TRADE"},
+           "validation": set(VALIDATION_STATUSES),
+           "volume": {"FULL", "LIMITED", "UNVERIFIED", "UNAVAILABLE", "NOT_REQUIRED"}}
+
+
+def _bad_choices(**lists: str | None) -> str | None:
+    """Validate comma-list filters; returns an error message or None."""
+    for k, v in lists.items():
+        if v is None:
+            continue
+        got = {x.strip().upper() for x in str(v).split(",") if x.strip()}
+        if got - CHOICES[k]:
+            return f"{k} must be a comma list of {sorted(CHOICES[k])}"
+    return None
+
+
 def create_app(service: Service | None = None, run_scanner: bool = True) -> FastAPI:
     settings = service.settings if service else load_settings()
 
@@ -819,22 +840,69 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     @app.get("/api/scanner")
     def scanner(mode: str | None = None, side: str | None = None, status: str | None = None,
                 min_rr: float | None = None, min_quality: float | None = None,
-                strategy: str | None = None, include_no_trade: bool = True) -> dict:
+                strategy: str | None = None, include_no_trade: bool = True,
+                signal_state: str | None = None, validation: str | None = None,
+                volume: str | None = None, max_level_atr: float | None = None,
+                max_level_pct: float | None = None,
+                min_liquidity: float | None = None) -> dict:
         """Latest opportunity-scanner snapshot (computed server-side), filtered."""
         s = svc()
         if mode not in (None, "day", "swing") or side not in (None, "bullish", "bearish"):
             raise HTTPException(400, {"code": "INVALID_REQUEST",
                                       "message": "mode must be day|swing, side bullish|bearish"})
+        bad = _bad_choices(signal_state=signal_state, validation=validation, volume=volume)
+        if bad:
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message": bad})
         snap = s.scanner.snapshot or s.scanner.run(trigger="first request")
         rows = filter_rows(snap["rows"], mode=mode, side=side, status=status, min_rr=min_rr,
                            min_quality=min_quality, strategy=strategy,
-                           include_no_trade=include_no_trade)
+                           include_no_trade=include_no_trade, signal_state=signal_state,
+                           validation=validation, volume=volume, max_level_atr=max_level_atr,
+                           max_level_pct=max_level_pct, min_liquidity=min_liquidity)
         hidden = ("rows", "results", "new_alerts", "setup_states")
         return {**{k: v for k, v in snap.items() if k not in hidden},
                 "rows": rows, "total_rows": len(snap["rows"]),
                 "due": s.scanner.due(), "scan_count": s.scanner.scan_count,
                 "poll_seconds": s.settings.scan_interval_seconds,
                 "last_error": s.scanner.last_error}
+
+    @app.get("/api/scanner/presets")
+    def presets() -> dict:
+        return {"presets": svc().db.presets(), "filter_keys": sorted(PRESET_KEYS)}
+
+    @app.post("/api/scanner/presets")
+    def save_preset(body: dict = Body(...)) -> dict:
+        """Save (or overwrite by name) a scanner preset: {"name", "filters"}."""
+        name = str(body.get("name") or "").strip()
+        filters = body.get("filters")
+        if not 1 <= len(name) <= 60:
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": "name must be 1-60 characters"})
+        if not isinstance(filters, dict) or set(filters) - PRESET_KEYS or not all(
+                v is None or isinstance(v, (str, int, float, bool)) for v in filters.values()):
+            raise HTTPException(400, {"code": "INVALID_REQUEST", "message":
+                                      f"filters must be an object with keys from "
+                                      f"{sorted(PRESET_KEYS)} and scalar values"})
+        bad = _bad_choices(**{k: filters.get(k) for k in ("signal_state", "validation",
+                                                           "volume")})
+        if bad or filters.get("mode") not in (None, "day", "swing") \
+                or filters.get("side") not in (None, "bullish", "bearish"):
+            raise HTTPException(400, {"code": "INVALID_REQUEST",
+                                      "message": bad or "mode must be day|swing, side "
+                                                        "bullish|bearish"})
+        return svc().db.save_preset(name, {k: v for k, v in filters.items() if v is not None})
+
+    @app.delete("/api/scanner/presets/{preset_id}")
+    def delete_preset(preset_id: int) -> dict:
+        if not svc().db.delete_preset(preset_id):
+            raise HTTPException(404, {"code": "NOT_FOUND", "message": "preset not found"})
+        return {"deleted": preset_id}
+
+    @app.get("/api/research/validation")
+    def research_validation() -> dict:
+        """The frozen historical validation behind the strategy status labels (read-only;
+        generated from research/validation/results/report.json)."""
+        return validation_registry()
 
     @app.post("/api/scanner/run")
     def scanner_run() -> dict:

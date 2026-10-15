@@ -451,7 +451,9 @@ def test_scheduler_creates_alerts_with_no_dashboard_open(tmp_path):
     svc = Service(st, market=market, db=Database(st.database_path))
     with TestClient(create_app(svc, run_scanner=True)):
         deadline = time.monotonic() + 60
-        while svc.scanner.scan_count == 0 and time.monotonic() < deadline:
+        # scan_count rises before the alert engine has processed that scan: wait for both
+        while (svc.scanner.scan_count == 0 or svc.alerts.last_run is None) \
+                and time.monotonic() < deadline:
             time.sleep(0.2)
     # Nobody called the API: the server-side loop scanned and the alert engine ran.
     assert svc.scanner.scan_count >= 1 and svc.alerts.last_run is not None

@@ -122,6 +122,15 @@ CREATE TABLE IF NOT EXISTS journal_fills (
     UNIQUE (trade_id, side, quantity, price, executed_at)  -- the same fill twice is rejected
 );
 CREATE INDEX IF NOT EXISTS journal_fills_trade ON journal_fills (trade_id);
+-- Saved scanner filter presets (user-defined; filters is the JSON object of /api/scanner
+-- query parameters).
+CREATE TABLE IF NOT EXISTS scanner_presets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    filters TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS ai_cache (
     cache_key TEXT PRIMARY KEY,
     payload TEXT NOT NULL,
@@ -489,6 +498,31 @@ class Database:
             self._conn.executemany(
                 "INSERT INTO watchlist (symbol, position, added_at) VALUES (?,?,?)",
                 [(s, i, now) for i, s in enumerate(symbols)])
+
+    # ----------------------------------------------------------- scanner presets
+
+    def presets(self) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM scanner_presets ORDER BY name COLLATE NOCASE").fetchall()
+        return [{"id": r["id"], "name": r["name"], "filters": json.loads(r["filters"]),
+                 "created_at": r["created_at"], "updated_at": r["updated_at"]} for r in rows]
+
+    def save_preset(self, name: str, filters: dict) -> dict:
+        """Create a preset, or replace the filters of the preset with this name."""
+        now = int(time.time())
+        with self._lock, self._conn:
+            self._conn.execute(
+                """INSERT INTO scanner_presets (name, filters, created_at, updated_at)
+                   VALUES (?,?,?,?) ON CONFLICT(name) DO UPDATE
+                   SET filters=excluded.filters, updated_at=excluded.updated_at""",
+                (name, json.dumps(filters, sort_keys=True), now, now))
+        return next(p for p in self.presets() if p["name"] == name)
+
+    def delete_preset(self, preset_id: int) -> bool:
+        with self._lock, self._conn:
+            return self._conn.execute("DELETE FROM scanner_presets WHERE id=?",
+                                      (preset_id,)).rowcount > 0
 
     def get_ai(self, cache_key: str) -> dict | None:
         with self._lock:

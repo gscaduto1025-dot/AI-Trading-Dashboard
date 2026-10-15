@@ -1,0 +1,1579 @@
+{
+ "baseline": "rejected-v1",
+ "frozen_on": "2026-10-15",
+ "rules_hash": "12a8e177290a29b6dfe518abbaea3b9493315145c437fd9018622facd630ef49",
+ "source": "research/validation/results/report.json (frozen 50-ticker validation)",
+ "criteria": {
+  "VALIDATED_POSITIVE": "Net 95% CI above zero in validation and confirmed by a pre-registered confirmatory test.",
+  "NEGATIVE_HISTORICAL_EVIDENCE": ">= 30 validation trades and the net 95% CI is below zero.",
+  "INCONCLUSIVE": ">= 30 validation trades and the net 95% CI includes zero (or is positive but unconfirmed).",
+  "UNVALIDATED": "Fewer than 30 validation trades, or never tested."
+ },
+ "costs": "BacktestConfig defaults: per side half-spread 2 bps + slippage 3 bps (day) / 5 bps (swing), commission $0.005/share, SEC fee 27.8 per $1M sold, FINRA TAF $0.000166/share sold, short borrow 1 %/yr. Volume policy: IEX intraday volume with point-in-time SIP overlay (16-minute embargo), partial_volume_policy=unverified.",
+ "modes": {
+  "day": {
+   "sample": "50 unseen S&P 500 stocks, 2023-11-01 to 2024-10-31",
+   "independence": "unseen tickers and unseen period",
+   "overall": {
+    "n": 11701,
+    "win_rate": 23.6,
+    "win_ci": [
+     22.8,
+     24.3
+    ],
+    "exp_r": -0.628,
+    "exp_ci": [
+     -0.656,
+     -0.6
+    ],
+    "pf": 0.42,
+    "max_dd_r": 7360.87,
+    "gross_exp_r": 0.042,
+    "mean_cost_r": 0.67,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.042,
+      "exp_ci": [
+       0.016,
+       0.068
+      ],
+      "pf": 1.08,
+      "max_dd_r": 103.98
+     },
+     "x0.2": {
+      "exp_r": -0.092,
+      "exp_ci": [
+       -0.119,
+       -0.066
+      ],
+      "pf": 0.86,
+      "max_dd_r": 1097.31
+     },
+     "x0.25": {
+      "exp_r": -0.126,
+      "exp_ci": [
+       -0.152,
+       -0.099
+      ],
+      "pf": 0.81,
+      "max_dd_r": 1486.18
+     },
+     "x0.5": {
+      "exp_r": -0.293,
+      "exp_ci": [
+       -0.32,
+       -0.266
+      ],
+      "pf": 0.63,
+      "max_dd_r": 3443.4
+     },
+     "x1": {
+      "exp_r": -0.628,
+      "exp_ci": [
+       -0.656,
+       -0.6
+      ],
+      "pf": 0.42,
+      "max_dd_r": 7360.87
+     },
+     "x2": {
+      "exp_r": -1.298,
+      "exp_ci": [
+       -1.329,
+       -1.267
+      ],
+      "pf": 0.21,
+      "max_dd_r": 15195.82
+     }
+    }
+   },
+   "preregistered": {
+    "h2_htf_aligned": {
+     "n": 5119,
+     "win_rate": 24.6,
+     "win_ci": [
+      23.5,
+      25.8
+     ],
+     "exp_r": -0.59,
+     "median_r": -1.313,
+     "pf": 0.44,
+     "avg_win": 1.88,
+     "avg_loss": -1.4,
+     "total_r": -3022.6,
+     "t": -26.76,
+     "exp_ci": [
+      -0.635,
+      -0.547
+     ],
+     "max_dd_r": 3030.32,
+     "gross_exp_r": 0.056,
+     "mean_cost_r": 0.647,
+     "verdict": "negative (95% CI below 0)",
+     "cost_sensitivity": {
+      "x0": {
+       "exp_r": 0.056,
+       "exp_ci": [
+        0.015,
+        0.097
+       ],
+       "pf": 1.11,
+       "max_dd_r": 77.14
+      },
+      "x0.2": {
+       "exp_r": -0.073,
+       "exp_ci": [
+        -0.114,
+        -0.032
+       ],
+       "pf": 0.88,
+       "max_dd_r": 397.17
+      },
+      "x0.25": {
+       "exp_r": -0.105,
+       "exp_ci": [
+        -0.147,
+        -0.064
+       ],
+       "pf": 0.84,
+       "max_dd_r": 553.35
+      },
+      "x0.5": {
+       "exp_r": -0.267,
+       "exp_ci": [
+        -0.309,
+        -0.225
+       ],
+       "pf": 0.66,
+       "max_dd_r": 1376.1
+      },
+      "x1": {
+       "exp_r": -0.59,
+       "exp_ci": [
+        -0.635,
+        -0.547
+       ],
+       "pf": 0.44,
+       "max_dd_r": 3030.32
+      },
+      "x2": {
+       "exp_r": -1.237,
+       "exp_ci": [
+        -1.286,
+        -1.189
+       ],
+       "pf": 0.22,
+       "max_dd_r": 6338.77
+      }
+     }
+    },
+    "h3_quality_ge_70": {
+     "n": 4019,
+     "win_rate": 23.8,
+     "win_ci": [
+      22.5,
+      25.2
+     ],
+     "exp_r": -0.576,
+     "median_r": -1.32,
+     "pf": 0.46,
+     "avg_win": 2.06,
+     "avg_loss": -1.4,
+     "total_r": -2315.1,
+     "t": -21.9,
+     "exp_ci": [
+      -0.626,
+      -0.525
+     ],
+     "max_dd_r": 2323.18,
+     "gross_exp_r": 0.084,
+     "mean_cost_r": 0.66,
+     "verdict": "negative (95% CI below 0)",
+     "cost_sensitivity": {
+      "x0": {
+       "exp_r": 0.084,
+       "exp_ci": [
+        0.036,
+        0.132
+       ],
+       "pf": 1.16,
+       "max_dd_r": 57.88
+      },
+      "x0.2": {
+       "exp_r": -0.048,
+       "exp_ci": [
+        -0.097,
+        0.001
+       ],
+       "pf": 0.92,
+       "max_dd_r": 226.7
+      },
+      "x0.25": {
+       "exp_r": -0.081,
+       "exp_ci": [
+        -0.13,
+        -0.032
+       ],
+       "pf": 0.88,
+       "max_dd_r": 357.58
+      },
+      "x0.5": {
+       "exp_r": -0.246,
+       "exp_ci": [
+        -0.296,
+        -0.196
+       ],
+       "pf": 0.69,
+       "max_dd_r": 1011.95
+      },
+      "x1": {
+       "exp_r": -0.576,
+       "exp_ci": [
+        -0.626,
+        -0.525
+       ],
+       "pf": 0.46,
+       "max_dd_r": 2323.18
+      },
+      "x2": {
+       "exp_r": -1.236,
+       "exp_ci": [
+        -1.29,
+        -1.18
+       ],
+       "pf": 0.24,
+       "max_dd_r": 4969.0
+      }
+     }
+    },
+    "p_two_sided": {
+     "gross_all": 0.00214,
+     "gross_h2_htf_aligned": 0.00657,
+     "gross_h3_quality70": 0.0008,
+     "net_measured_cost_x0.2": 0.0
+    },
+    "p_holm": {
+     "net_measured_cost_x0.2": 0.0,
+     "gross_h3_quality70": 0.0024,
+     "gross_all": 0.00428,
+     "gross_h2_htf_aligned": 0.00657
+    }
+   }
+  },
+  "swing": {
+   "sample": "50 unseen S&P 500 stocks, 2021-07-01 to 2026-04-30",
+   "independence": "unseen tickers only; same dates as swing development",
+   "overall": {
+    "n": 227,
+    "win_rate": 28.6,
+    "win_ci": [
+     23.1,
+     34.8
+    ],
+    "exp_r": -0.22,
+    "exp_ci": [
+     -0.429,
+     -0.009
+    ],
+    "pf": 0.71,
+    "max_dd_r": 51.96,
+    "gross_exp_r": -0.155,
+    "mean_cost_r": 0.065,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": -0.155,
+      "exp_ci": [
+       -0.363,
+       0.054
+      ],
+      "pf": 0.78,
+      "max_dd_r": 37.54
+     },
+     "x0.2": {
+      "exp_r": -0.168,
+      "exp_ci": [
+       -0.377,
+       0.042
+      ],
+      "pf": 0.77,
+      "max_dd_r": 40.21
+     },
+     "x0.25": {
+      "exp_r": -0.171,
+      "exp_ci": [
+       -0.38,
+       0.039
+      ],
+      "pf": 0.76,
+      "max_dd_r": 40.88
+     },
+     "x0.5": {
+      "exp_r": -0.188,
+      "exp_ci": [
+       -0.396,
+       0.023
+      ],
+      "pf": 0.74,
+      "max_dd_r": 44.57
+     },
+     "x1": {
+      "exp_r": -0.22,
+      "exp_ci": [
+       -0.429,
+       -0.009
+      ],
+      "pf": 0.71,
+      "max_dd_r": 51.96
+     },
+     "x2": {
+      "exp_r": -0.286,
+      "exp_ci": [
+       -0.498,
+       -0.074
+      ],
+      "pf": 0.65,
+      "max_dd_r": 66.73
+     }
+    }
+   },
+   "preregistered": {
+    "h2_htf_aligned": {
+     "n": 165,
+     "win_rate": 28.5,
+     "win_ci": [
+      22.1,
+      35.8
+     ],
+     "exp_r": -0.234,
+     "median_r": -1.026,
+     "pf": 0.69,
+     "avg_win": 1.87,
+     "avg_loss": -1.07,
+     "total_r": -38.7,
+     "t": -1.83,
+     "exp_ci": [
+      -0.48,
+      0.022
+     ],
+     "max_dd_r": 40.83,
+     "gross_exp_r": -0.172,
+     "mean_cost_r": 0.062,
+     "verdict": "inconclusive (95% CI includes 0)",
+     "cost_sensitivity": {
+      "x0": {
+       "exp_r": -0.172,
+       "exp_ci": [
+        -0.416,
+        0.083
+       ],
+       "pf": 0.76,
+       "max_dd_r": 33.23
+      },
+      "x0.2": {
+       "exp_r": -0.185,
+       "exp_ci": [
+        -0.429,
+        0.071
+       ],
+       "pf": 0.75,
+       "max_dd_r": 34.75
+      },
+      "x0.25": {
+       "exp_r": -0.188,
+       "exp_ci": [
+        -0.432,
+        0.067
+       ],
+       "pf": 0.74,
+       "max_dd_r": 35.13
+      },
+      "x0.5": {
+       "exp_r": -0.203,
+       "exp_ci": [
+        -0.448,
+        0.052
+       ],
+       "pf": 0.73,
+       "max_dd_r": 37.02
+      },
+      "x1": {
+       "exp_r": -0.234,
+       "exp_ci": [
+        -0.48,
+        0.022
+       ],
+       "pf": 0.69,
+       "max_dd_r": 40.83
+      },
+      "x2": {
+       "exp_r": -0.296,
+       "exp_ci": [
+        -0.541,
+        -0.038
+       ],
+       "pf": 0.64,
+       "max_dd_r": 48.86
+      }
+     }
+    },
+    "h3_quality_ge_70": {
+     "n": 134,
+     "win_rate": 29.9,
+     "win_ci": [
+      22.8,
+      38.1
+     ],
+     "exp_r": -0.225,
+     "median_r": -1.026,
+     "pf": 0.71,
+     "avg_win": 1.85,
+     "avg_loss": -1.11,
+     "total_r": -30.2,
+     "t": -1.54,
+     "exp_ci": [
+      -0.509,
+      0.065
+     ],
+     "max_dd_r": 35.85,
+     "gross_exp_r": -0.164,
+     "mean_cost_r": 0.062,
+     "verdict": "inconclusive (95% CI includes 0)",
+     "cost_sensitivity": {
+      "x0": {
+       "exp_r": -0.164,
+       "exp_ci": [
+        -0.444,
+        0.124
+       ],
+       "pf": 0.77,
+       "max_dd_r": 29.51
+      },
+      "x0.2": {
+       "exp_r": -0.176,
+       "exp_ci": [
+        -0.457,
+        0.112
+       ],
+       "pf": 0.76,
+       "max_dd_r": 30.78
+      },
+      "x0.25": {
+       "exp_r": -0.179,
+       "exp_ci": [
+        -0.46,
+        0.109
+       ],
+       "pf": 0.76,
+       "max_dd_r": 31.09
+      },
+      "x0.5": {
+       "exp_r": -0.195,
+       "exp_ci": [
+        -0.476,
+        0.095
+       ],
+       "pf": 0.74,
+       "max_dd_r": 32.68
+      },
+      "x1": {
+       "exp_r": -0.225,
+       "exp_ci": [
+        -0.509,
+        0.065
+       ],
+       "pf": 0.71,
+       "max_dd_r": 35.85
+      },
+      "x2": {
+       "exp_r": -0.287,
+       "exp_ci": [
+        -0.574,
+        0.008
+       ],
+       "pf": 0.65,
+       "max_dd_r": 42.18
+      }
+     }
+    },
+    "p_two_sided": {
+     "gross_all": 0.14177,
+     "gross_h2_htf_aligned": 0.17408,
+     "gross_h3_quality70": 0.25937,
+     "net_measured_cost_x0.2": 0.11173
+    },
+    "p_holm": {
+     "net_measured_cost_x0.2": 0.44692,
+     "gross_all": 0.44692,
+     "gross_h2_htf_aligned": 0.44692,
+     "gross_h3_quality70": 0.44692
+    }
+   }
+  }
+ },
+ "strategies": {
+  "liquidity_sweep_reversal": {
+   "mode": "day",
+   "status": "NEGATIVE_HISTORICAL_EVIDENCE",
+   "label": "Negative historical evidence",
+   "summary": "Lost -0.66R per trade after costs over 9836 validation trades (95% CI -0.69 to -0.62R).",
+   "note": null,
+   "evidence": {
+    "n": 9836,
+    "win_rate": 22.6,
+    "win_ci": [
+     21.8,
+     23.4
+    ],
+    "exp_r": -0.657,
+    "exp_ci": [
+     -0.688,
+     -0.625
+    ],
+    "pf": 0.41,
+    "max_dd_r": 6472.87,
+    "gross_exp_r": 0.038,
+    "mean_cost_r": 0.694,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.038,
+      "exp_ci": [
+       0.008,
+       0.067
+      ],
+      "pf": 1.07,
+      "max_dd_r": 82.3
+     },
+     "x0.2": {
+      "exp_r": -0.101,
+      "exp_ci": [
+       -0.131,
+       -0.071
+      ],
+      "pf": 0.84,
+      "max_dd_r": 1015.24
+     },
+     "x0.25": {
+      "exp_r": -0.136,
+      "exp_ci": [
+       -0.166,
+       -0.106
+      ],
+      "pf": 0.8,
+      "max_dd_r": 1355.55
+     },
+     "x0.5": {
+      "exp_r": -0.31,
+      "exp_ci": [
+       -0.34,
+       -0.279
+      ],
+      "pf": 0.62,
+      "max_dd_r": 3059.06
+     },
+     "x1": {
+      "exp_r": -0.657,
+      "exp_ci": [
+       -0.688,
+       -0.625
+      ],
+      "pf": 0.41,
+      "max_dd_r": 6472.87
+     },
+     "x2": {
+      "exp_r": -1.351,
+      "exp_ci": [
+       -1.386,
+       -1.317
+      ],
+      "pf": 0.21,
+      "max_dd_r": 13300.47
+     }
+    }
+   },
+   "by_timeframe": {
+    "5Min": {
+     "n": 7905,
+     "win_rate": 21.9,
+     "win_ci": [
+      21.0,
+      22.8
+     ],
+     "exp_r": -0.69,
+     "exp_ci": [
+      -0.728,
+      -0.654
+     ],
+     "pf": 0.4,
+     "max_dd_r": 5463.78,
+     "gross_exp_r": 0.053,
+     "mean_cost_r": 0.743,
+     "verdict": "negative (95% CI below 0)"
+    },
+    "15Min": {
+     "n": 1931,
+     "win_rate": 25.3,
+     "win_ci": [
+      23.4,
+      27.3
+     ],
+     "exp_r": -0.519,
+     "exp_ci": [
+      -0.578,
+      -0.459
+     ],
+     "pf": 0.44,
+     "max_dd_r": 1010.51,
+     "gross_exp_r": -0.024,
+     "mean_cost_r": 0.496,
+     "verdict": "negative (95% CI below 0)"
+    }
+   }
+  },
+  "trend_pullback": {
+   "mode": "day",
+   "status": "NEGATIVE_HISTORICAL_EVIDENCE",
+   "label": "Negative historical evidence",
+   "summary": "Lost -0.59R per trade after costs over 993 validation trades (95% CI -0.67 to -0.49R).",
+   "note": null,
+   "evidence": {
+    "n": 993,
+    "win_rate": 27.2,
+    "win_ci": [
+     24.5,
+     30.0
+    ],
+    "exp_r": -0.586,
+    "exp_ci": [
+     -0.672,
+     -0.493
+    ],
+    "pf": 0.43,
+    "max_dd_r": 581.93,
+    "gross_exp_r": 0.047,
+    "mean_cost_r": 0.633,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.047,
+      "exp_ci": [
+       -0.032,
+       0.13
+      ],
+      "pf": 1.09,
+      "max_dd_r": 39.69
+     },
+     "x0.2": {
+      "exp_r": -0.08,
+      "exp_ci": [
+       -0.16,
+       0.005
+      ],
+      "pf": 0.87,
+      "max_dd_r": 116.65
+     },
+     "x0.25": {
+      "exp_r": -0.111,
+      "exp_ci": [
+       -0.192,
+       -0.025
+      ],
+      "pf": 0.83,
+      "max_dd_r": 135.89
+     },
+     "x0.5": {
+      "exp_r": -0.269,
+      "exp_ci": [
+       -0.352,
+       -0.182
+      ],
+      "pf": 0.65,
+      "max_dd_r": 269.94
+     },
+     "x1": {
+      "exp_r": -0.586,
+      "exp_ci": [
+       -0.672,
+       -0.493
+      ],
+      "pf": 0.43,
+      "max_dd_r": 581.93
+     },
+     "x2": {
+      "exp_r": -1.219,
+      "exp_ci": [
+       -1.316,
+       -1.115
+      ],
+      "pf": 0.21,
+      "max_dd_r": 1210.57
+     }
+    }
+   },
+   "by_timeframe": {
+    "5Min": {
+     "n": 851,
+     "win_rate": 26.1,
+     "win_ci": [
+      23.2,
+      29.1
+     ],
+     "exp_r": -0.62,
+     "exp_ci": [
+      -0.721,
+      -0.523
+     ],
+     "pf": 0.42,
+     "max_dd_r": 527.81,
+     "gross_exp_r": 0.05,
+     "mean_cost_r": 0.67,
+     "verdict": "negative (95% CI below 0)"
+    },
+    "15Min": {
+     "n": 142,
+     "win_rate": 33.8,
+     "win_ci": [
+      26.5,
+      41.9
+     ],
+     "exp_r": -0.381,
+     "exp_ci": [
+      -0.571,
+      -0.183
+     ],
+     "pf": 0.48,
+     "max_dd_r": 56.3,
+     "gross_exp_r": 0.031,
+     "mean_cost_r": 0.412,
+     "verdict": "negative (95% CI below 0)"
+    }
+   }
+  },
+  "sr_rejection": {
+   "mode": "day",
+   "status": "NEGATIVE_HISTORICAL_EVIDENCE",
+   "label": "Negative historical evidence",
+   "summary": "Lost -0.45R per trade after costs over 520 validation trades (95% CI -0.58 to -0.32R).",
+   "note": null,
+   "evidence": {
+    "n": 520,
+    "win_rate": 28.5,
+    "win_ci": [
+     24.8,
+     32.5
+    ],
+    "exp_r": -0.451,
+    "exp_ci": [
+     -0.576,
+     -0.324
+    ],
+    "pf": 0.51,
+    "max_dd_r": 239.67,
+    "gross_exp_r": 0.044,
+    "mean_cost_r": 0.495,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.044,
+      "exp_ci": [
+       -0.073,
+       0.164
+      ],
+      "pf": 1.08,
+      "max_dd_r": 40.63
+     },
+     "x0.2": {
+      "exp_r": -0.055,
+      "exp_ci": [
+       -0.174,
+       0.067
+      ],
+      "pf": 0.91,
+      "max_dd_r": 63.46
+     },
+     "x0.25": {
+      "exp_r": -0.08,
+      "exp_ci": [
+       -0.198,
+       0.042
+      ],
+      "pf": 0.87,
+      "max_dd_r": 69.56
+     },
+     "x0.5": {
+      "exp_r": -0.203,
+      "exp_ci": [
+       -0.324,
+       -0.08
+      ],
+      "pf": 0.72,
+      "max_dd_r": 117.43
+     },
+     "x1": {
+      "exp_r": -0.451,
+      "exp_ci": [
+       -0.576,
+       -0.324
+      ],
+      "pf": 0.51,
+      "max_dd_r": 239.67
+     },
+     "x2": {
+      "exp_r": -0.945,
+      "exp_ci": [
+       -1.082,
+       -0.806
+      ],
+      "pf": 0.28,
+      "max_dd_r": 491.5
+     }
+    }
+   },
+   "by_timeframe": {
+    "5Min": {
+     "n": 367,
+     "win_rate": 28.1,
+     "win_ci": [
+      23.7,
+      32.9
+     ],
+     "exp_r": -0.43,
+     "exp_ci": [
+      -0.592,
+      -0.266
+     ],
+     "pf": 0.55,
+     "max_dd_r": 167.71,
+     "gross_exp_r": 0.112,
+     "mean_cost_r": 0.543,
+     "verdict": "negative (95% CI below 0)"
+    },
+    "15Min": {
+     "n": 153,
+     "win_rate": 29.4,
+     "win_ci": [
+      22.8,
+      37.1
+     ],
+     "exp_r": -0.499,
+     "exp_ci": [
+      -0.672,
+      -0.315
+     ],
+     "pf": 0.38,
+     "max_dd_r": 76.94,
+     "gross_exp_r": -0.12,
+     "mean_cost_r": 0.38,
+     "verdict": "negative (95% CI below 0)"
+    }
+   }
+  },
+  "breakout_retest": {
+   "mode": "day",
+   "status": "NEGATIVE_HISTORICAL_EVIDENCE",
+   "label": "Negative historical evidence",
+   "summary": "Lost -0.21R per trade after costs over 352 validation trades (95% CI -0.36 to -0.04R).",
+   "note": null,
+   "evidence": {
+    "n": 352,
+    "win_rate": 33.5,
+    "win_ci": [
+     28.8,
+     38.6
+    ],
+    "exp_r": -0.207,
+    "exp_ci": [
+     -0.356,
+     -0.045
+    ],
+    "pf": 0.72,
+    "max_dd_r": 72.94,
+    "gross_exp_r": 0.139,
+    "mean_cost_r": 0.346,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.139,
+      "exp_ci": [
+       -0.006,
+       0.293
+      ],
+      "pf": 1.29,
+      "max_dd_r": 16.44
+     },
+     "x0.2": {
+      "exp_r": 0.07,
+      "exp_ci": [
+       -0.076,
+       0.226
+      ],
+      "pf": 1.13,
+      "max_dd_r": 18.57
+     },
+     "x0.25": {
+      "exp_r": 0.052,
+      "exp_ci": [
+       -0.093,
+       0.209
+      ],
+      "pf": 1.1,
+      "max_dd_r": 19.49
+     },
+     "x0.5": {
+      "exp_r": -0.034,
+      "exp_ci": [
+       -0.18,
+       0.123
+      ],
+      "pf": 0.94,
+      "max_dd_r": 26.54
+     },
+     "x1": {
+      "exp_r": -0.207,
+      "exp_ci": [
+       -0.356,
+       -0.045
+      ],
+      "pf": 0.72,
+      "max_dd_r": 72.94
+     },
+     "x2": {
+      "exp_r": -0.553,
+      "exp_ci": [
+       -0.709,
+       -0.384
+      ],
+      "pf": 0.44,
+      "max_dd_r": 194.82
+     }
+    }
+   },
+   "by_timeframe": {
+    "5Min": {
+     "n": 187,
+     "win_rate": 29.9,
+     "win_ci": [
+      23.8,
+      36.9
+     ],
+     "exp_r": -0.265,
+     "exp_ci": [
+      -0.494,
+      -0.012
+     ],
+     "pf": 0.69,
+     "max_dd_r": 53.3,
+     "gross_exp_r": 0.162,
+     "mean_cost_r": 0.428,
+     "verdict": "negative (95% CI below 0)"
+    },
+    "15Min": {
+     "n": 165,
+     "win_rate": 37.6,
+     "win_ci": [
+      30.5,
+      45.2
+     ],
+     "exp_r": -0.141,
+     "exp_ci": [
+      -0.323,
+      0.048
+     ],
+     "pf": 0.76,
+     "max_dd_r": 30.79,
+     "gross_exp_r": 0.112,
+     "mean_cost_r": 0.254,
+     "verdict": "inconclusive (95% CI includes 0)"
+    }
+   }
+  },
+  "opening_range_breakout": {
+   "mode": "day",
+   "status": "UNVALIDATED",
+   "label": "Unvalidated",
+   "summary": "No trades in the validation sample, so there is no evidence.",
+   "note": "Zero trades and zero entry signals in development (9 tickers, 2024-11 to 2026-04) and validation (50 tickers, 2023-11 to 2024-10). Live evaluation shows the setups form but are rejected by the planning engine's 2:1 minimum reward/risk, because target 1 is the nearest key level. A design property, not a code fault; the rule is frozen.",
+   "evidence": null,
+   "by_timeframe": {}
+  },
+  "swing_breakout": {
+   "mode": "swing",
+   "status": "NEGATIVE_HISTORICAL_EVIDENCE",
+   "label": "Negative historical evidence",
+   "summary": "Lost -0.49R per trade after costs over 99 validation trades (95% CI -0.79 to -0.17R).",
+   "note": null,
+   "evidence": {
+    "n": 99,
+    "win_rate": 22.2,
+    "win_ci": [
+     15.2,
+     31.4
+    ],
+    "exp_r": -0.489,
+    "exp_ci": [
+     -0.792,
+     -0.171
+    ],
+    "pf": 0.44,
+    "max_dd_r": 49.39,
+    "gross_exp_r": -0.428,
+    "mean_cost_r": 0.061,
+    "verdict": "negative (95% CI below 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": -0.428,
+      "exp_ci": [
+       -0.731,
+       -0.112
+      ],
+      "pf": 0.48,
+      "max_dd_r": 43.48
+     },
+     "x0.2": {
+      "exp_r": -0.44,
+      "exp_ci": [
+       -0.743,
+       -0.124
+      ],
+      "pf": 0.47,
+      "max_dd_r": 44.66
+     },
+     "x0.25": {
+      "exp_r": -0.443,
+      "exp_ci": [
+       -0.746,
+       -0.127
+      ],
+      "pf": 0.47,
+      "max_dd_r": 44.95
+     },
+     "x0.5": {
+      "exp_r": -0.458,
+      "exp_ci": [
+       -0.762,
+       -0.142
+      ],
+      "pf": 0.46,
+      "max_dd_r": 46.43
+     },
+     "x1": {
+      "exp_r": -0.489,
+      "exp_ci": [
+       -0.792,
+       -0.171
+      ],
+      "pf": 0.44,
+      "max_dd_r": 49.39
+     },
+     "x2": {
+      "exp_r": -0.55,
+      "exp_ci": [
+       -0.854,
+       -0.229
+      ],
+      "pf": 0.41,
+      "max_dd_r": 55.3
+     }
+    }
+   },
+   "by_timeframe": {
+    "1Day": {
+     "n": 64,
+     "win_rate": 12.5,
+     "win_ci": [
+      6.5,
+      22.8
+     ],
+     "exp_r": -0.693,
+     "exp_ci": [
+      -1.027,
+      -0.345
+     ],
+     "pf": 0.29,
+     "max_dd_r": 45.34,
+     "gross_exp_r": -0.617,
+     "mean_cost_r": 0.076,
+     "verdict": "negative (95% CI below 0)"
+    },
+    "1Week": {
+     "n": 35,
+     "win_rate": 40.0,
+     "win_ci": [
+      25.6,
+      56.4
+     ],
+     "exp_r": -0.116,
+     "exp_ci": [
+      -0.709,
+      0.512
+     ],
+     "pf": 0.83,
+     "max_dd_r": 16.71,
+     "gross_exp_r": -0.082,
+     "mean_cost_r": 0.034,
+     "verdict": "inconclusive (95% CI includes 0)"
+    }
+   }
+  },
+  "swing_sr_reversal": {
+   "mode": "swing",
+   "status": "INCONCLUSIVE",
+   "label": "Inconclusive",
+   "summary": "-0.21R per trade after costs over 54 validation trades; the 95% CI (-0.56 to +0.18R) includes zero.",
+   "note": null,
+   "evidence": {
+    "n": 54,
+    "win_rate": 27.8,
+    "win_ci": [
+     17.6,
+     40.9
+    ],
+    "exp_r": -0.208,
+    "exp_ci": [
+     -0.556,
+     0.183
+    ],
+    "pf": 0.71,
+    "max_dd_r": 17.31,
+    "gross_exp_r": -0.151,
+    "mean_cost_r": 0.056,
+    "verdict": "inconclusive (95% CI includes 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": -0.151,
+      "exp_ci": [
+       -0.497,
+       0.234
+      ],
+      "pf": 0.77,
+      "max_dd_r": 15.75
+     },
+     "x0.2": {
+      "exp_r": -0.162,
+      "exp_ci": [
+       -0.509,
+       0.222
+      ],
+      "pf": 0.76,
+      "max_dd_r": 16.06
+     },
+     "x0.25": {
+      "exp_r": -0.165,
+      "exp_ci": [
+       -0.512,
+       0.22
+      ],
+      "pf": 0.76,
+      "max_dd_r": 16.14
+     },
+     "x0.5": {
+      "exp_r": -0.179,
+      "exp_ci": [
+       -0.527,
+       0.208
+      ],
+      "pf": 0.74,
+      "max_dd_r": 16.53
+     },
+     "x1": {
+      "exp_r": -0.208,
+      "exp_ci": [
+       -0.556,
+       0.183
+      ],
+      "pf": 0.71,
+      "max_dd_r": 17.31
+     },
+     "x2": {
+      "exp_r": -0.264,
+      "exp_ci": [
+       -0.616,
+       0.127
+      ],
+      "pf": 0.65,
+      "max_dd_r": 18.87
+     }
+    }
+   },
+   "by_timeframe": {
+    "1Day": {
+     "n": 45,
+     "win_rate": 22.2,
+     "win_ci": [
+      12.5,
+      36.3
+     ],
+     "exp_r": -0.263,
+     "exp_ci": [
+      -0.68,
+      0.189
+     ],
+     "pf": 0.67,
+     "max_dd_r": 16.98,
+     "gross_exp_r": -0.201,
+     "mean_cost_r": 0.062,
+     "verdict": "inconclusive (95% CI includes 0)"
+    },
+    "1Week": {
+     "n": 9,
+     "win_rate": 55.6,
+     "win_ci": [
+      26.7,
+      81.1
+     ],
+     "exp_r": 0.071,
+     "exp_ci": [
+      -0.343,
+      0.469
+     ],
+     "pf": 1.28,
+     "max_dd_r": 1.19,
+     "gross_exp_r": 0.098,
+     "mean_cost_r": 0.027,
+     "verdict": "insufficient sample (< 30 trades)"
+    }
+   }
+  },
+  "swing_consolidation_breakout": {
+   "mode": "swing",
+   "status": "INCONCLUSIVE",
+   "label": "Inconclusive",
+   "summary": "-0.03R per trade after costs over 36 validation trades; the 95% CI (-0.60 to +0.61R) includes zero.",
+   "note": null,
+   "evidence": {
+    "n": 36,
+    "win_rate": 27.8,
+    "win_ci": [
+     15.8,
+     44.0
+    ],
+    "exp_r": -0.025,
+    "exp_ci": [
+     -0.597,
+     0.613
+    ],
+    "pf": 0.97,
+    "max_dd_r": 9.48,
+    "gross_exp_r": 0.085,
+    "mean_cost_r": 0.111,
+    "verdict": "inconclusive (95% CI includes 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.085,
+      "exp_ci": [
+       -0.481,
+       0.711
+      ],
+      "pf": 1.12,
+      "max_dd_r": 8.47
+     },
+     "x0.2": {
+      "exp_r": 0.063,
+      "exp_ci": [
+       -0.504,
+       0.691
+      ],
+      "pf": 1.09,
+      "max_dd_r": 8.67
+     },
+     "x0.25": {
+      "exp_r": 0.057,
+      "exp_ci": [
+       -0.509,
+       0.686
+      ],
+      "pf": 1.08,
+      "max_dd_r": 8.72
+     },
+     "x0.5": {
+      "exp_r": 0.03,
+      "exp_ci": [
+       -0.537,
+       0.662
+      ],
+      "pf": 1.04,
+      "max_dd_r": 8.98
+     },
+     "x1": {
+      "exp_r": -0.025,
+      "exp_ci": [
+       -0.597,
+       0.613
+      ],
+      "pf": 0.97,
+      "max_dd_r": 9.48
+     },
+     "x2": {
+      "exp_r": -0.136,
+      "exp_ci": [
+       -0.723,
+       0.514
+      ],
+      "pf": 0.85,
+      "max_dd_r": 10.49
+     }
+    }
+   },
+   "by_timeframe": {
+    "1Day": {
+     "n": 25,
+     "win_rate": 20.0,
+     "win_ci": [
+      8.9,
+      39.1
+     ],
+     "exp_r": -0.211,
+     "exp_ci": [
+      -0.879,
+      0.587
+     ],
+     "pf": 0.76,
+     "max_dd_r": 10.45,
+     "gross_exp_r": -0.072,
+     "mean_cost_r": 0.139,
+     "verdict": "insufficient sample (< 30 trades)"
+    },
+    "1Week": {
+     "n": 11,
+     "win_rate": 45.5,
+     "win_ci": [
+      21.3,
+      72.0
+     ],
+     "exp_r": 0.397,
+     "exp_ci": [
+      -0.61,
+      1.451
+     ],
+     "pf": 1.69,
+     "max_dd_r": 4.82,
+     "gross_exp_r": 0.442,
+     "mean_cost_r": 0.045,
+     "verdict": "insufficient sample (< 30 trades)"
+    }
+   }
+  },
+  "swing_trend_continuation": {
+   "mode": "swing",
+   "status": "INCONCLUSIVE",
+   "label": "Inconclusive",
+   "summary": "+0.37R per trade after costs over 34 validation trades; the 95% CI (-0.14 to +0.91R) includes zero.",
+   "note": null,
+   "evidence": {
+    "n": 34,
+    "win_rate": 50.0,
+    "win_ci": [
+     34.1,
+     65.9
+    ],
+    "exp_r": 0.372,
+    "exp_ci": [
+     -0.14,
+     0.908
+    ],
+    "pf": 1.76,
+    "max_dd_r": 3.1,
+    "gross_exp_r": 0.42,
+    "mean_cost_r": 0.048,
+    "verdict": "inconclusive (95% CI includes 0)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": 0.42,
+      "exp_ci": [
+       -0.09,
+       0.952
+      ],
+      "pf": 1.92,
+      "max_dd_r": 2.93
+     },
+     "x0.2": {
+      "exp_r": 0.411,
+      "exp_ci": [
+       -0.1,
+       0.943
+      ],
+      "pf": 1.88,
+      "max_dd_r": 2.97
+     },
+     "x0.25": {
+      "exp_r": 0.408,
+      "exp_ci": [
+       -0.103,
+       0.941
+      ],
+      "pf": 1.88,
+      "max_dd_r": 2.97
+     },
+     "x0.5": {
+      "exp_r": 0.396,
+      "exp_ci": [
+       -0.115,
+       0.931
+      ],
+      "pf": 1.84,
+      "max_dd_r": 3.02
+     },
+     "x1": {
+      "exp_r": 0.372,
+      "exp_ci": [
+       -0.14,
+       0.908
+      ],
+      "pf": 1.76,
+      "max_dd_r": 3.1
+     },
+     "x2": {
+      "exp_r": 0.324,
+      "exp_ci": [
+       -0.192,
+       0.863
+      ],
+      "pf": 1.62,
+      "max_dd_r": 3.35
+     }
+    }
+   },
+   "by_timeframe": {
+    "1Day": {
+     "n": 25,
+     "win_rate": 36.0,
+     "win_ci": [
+      20.2,
+      55.5
+     ],
+     "exp_r": 0.131,
+     "exp_ci": [
+      -0.473,
+      0.81
+     ],
+     "pf": 1.21,
+     "max_dd_r": 5.85,
+     "gross_exp_r": 0.188,
+     "mean_cost_r": 0.057,
+     "verdict": "insufficient sample (< 30 trades)"
+    },
+    "1Week": {
+     "n": 9,
+     "win_rate": 88.9,
+     "win_ci": [
+      56.5,
+      98.0
+     ],
+     "exp_r": 1.042,
+     "exp_ci": [
+      0.313,
+      1.802
+     ],
+     "pf": 10.02,
+     "max_dd_r": 1.04,
+     "gross_exp_r": 1.066,
+     "mean_cost_r": 0.024,
+     "verdict": "insufficient sample (< 30 trades)"
+    }
+   }
+  },
+  "swing_trend_reversal": {
+   "mode": "swing",
+   "status": "UNVALIDATED",
+   "label": "Unvalidated",
+   "summary": "Only 4 validation trades: too few to judge.",
+   "note": null,
+   "evidence": {
+    "n": 4,
+    "win_rate": 25.0,
+    "win_ci": [
+     4.6,
+     69.9
+    ],
+    "exp_r": -0.537,
+    "exp_ci": [
+     -1.017,
+     0.141
+    ],
+    "pf": 0.2,
+    "max_dd_r": 2.67,
+    "gross_exp_r": -0.504,
+    "mean_cost_r": 0.032,
+    "verdict": "insufficient sample (< 30 trades)",
+    "cost_sensitivity": {
+     "x0": {
+      "exp_r": -0.504,
+      "exp_ci": [
+       -0.987,
+       0.177
+      ],
+      "pf": 0.22,
+      "max_dd_r": 2.58
+     },
+     "x0.2": {
+      "exp_r": -0.511,
+      "exp_ci": [
+       -0.993,
+       0.169
+      ],
+      "pf": 0.21,
+      "max_dd_r": 2.6
+     },
+     "x0.25": {
+      "exp_r": -0.512,
+      "exp_ci": [
+       -0.994,
+       0.168
+      ],
+      "pf": 0.21,
+      "max_dd_r": 2.6
+     },
+     "x0.5": {
+      "exp_r": -0.52,
+      "exp_ci": [
+       -1.002,
+       0.158
+      ],
+      "pf": 0.21,
+      "max_dd_r": 2.63
+     },
+     "x1": {
+      "exp_r": -0.537,
+      "exp_ci": [
+       -1.017,
+       0.141
+      ],
+      "pf": 0.2,
+      "max_dd_r": 2.67
+     },
+     "x2": {
+      "exp_r": -0.569,
+      "exp_ci": [
+       -1.048,
+       0.106
+      ],
+      "pf": 0.18,
+      "max_dd_r": 2.76
+     }
+    }
+   },
+   "by_timeframe": {
+    "1Day": {
+     "n": 4,
+     "win_rate": 25.0,
+     "win_ci": [
+      4.6,
+      69.9
+     ],
+     "exp_r": -0.537,
+     "exp_ci": [
+      -1.017,
+      0.141
+     ],
+     "pf": 0.2,
+     "max_dd_r": 2.67,
+     "gross_exp_r": -0.504,
+     "mean_cost_r": 0.032,
+     "verdict": "insufficient sample (< 30 trades)"
+    }
+   }
+  }
+ }
+}
