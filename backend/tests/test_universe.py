@@ -220,6 +220,20 @@ def test_schedule_due_logic(svc, monkeypatch):
     assert u.due(now=time.time() + 901) in (True, False)  # closed-market rule may hold it
 
 
+def test_after_close_rule_covers_after_hours_and_pre_market(svc, monkeypatch):
+    """Phase 2 live finding: after the 16:00 close the universe kept rescanning every
+    interval during after-hours. Once a complete scan ran after the close (+16 min), only
+    the regular session makes it due again."""
+    u = svc.universe
+    u.interval = 900
+    u.run("test")  # completed long after the demo calendar's last close
+    later = time.time() + 901
+    for phase, expect in (("regular", True), ("after-hours", False), ("pre-market", False),
+                          ("closed", False)):
+        monkeypatch.setattr(svc.market, "market_status", lambda p=phase: {"phase": p})
+        assert u.due(now=later) is expect, phase
+
+
 def test_no_claude_calls_and_no_alerts(scanned, monkeypatch):
     s, _ = scanned
     calls = []

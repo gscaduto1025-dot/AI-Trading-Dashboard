@@ -104,10 +104,12 @@ class UniverseScanner:
             return False
         if now - last["started_at"] < self.interval:
             return False
-        # Market closed: one complete scan after the last close is enough.
+        # Outside the regular session (after-hours, overnight, pre-market) no regular-
+        # session candle changes: one complete scan after the last close is enough.
+        # ("after-hours" used to fall through, rescanning every interval until 20:00.)
         market = self.svc.market
         phase = market.market_status().get("phase")
-        if phase == "closed":
+        if phase != "regular":
             close = market.calendar.last_completed_session(market.cutoff()).close
             done = next((r for r in runs if r["status"] == "completed"), None)
             if done and done["started_at"] > close.timestamp() + 16 * 60:
