@@ -171,6 +171,19 @@ Every feature is a tab or panel of the dashboard, backed by the API.
 - **Opportunity scanner** (`app/scanner`): the server scans the whole watchlist in both
   modes on every new eligible candle. It ranks setups, flags stale or missing data, and
   opens any row as a full analysis.
+  - **Strategy evidence label** on every setup (`app/validation`): NEGATIVE HISTORICAL
+    EVIDENCE, INCONCLUSIVE, UNVALIDATED, or VALIDATED POSITIVE only after a pre-registered
+    confirmatory test (none so far). It comes from the frozen 50-stock validation, and
+    alerts carry it too. The setup-quality score is a technical rules score, shown apart
+    from any evidence. Setups are technical analysis, not recommendations.
+  - **Filters:** mode, direction, strategy or family, status, entry state (entry
+    conditions met now, or triggered earlier), evidence status, volume verification,
+    key-level distance (ATR), minimum R:R, setup quality and liquidity (consolidated $ ADV).
+  - **Saved presets:** stored server-side, overwritten by name.
+- **Research dashboard** (Research tab, `GET /api/research/validation`): the frozen
+  validation per mode, strategy and timeframe, with trades, win rate, net R and its 95% CI,
+  profit factor, drawdown, cost sensitivity and the pre-registered endpoints. Read-only.
+  The next-generation protocol is a design only: [docs/RESEARCH_PROTOCOL_V2.md](docs/RESEARCH_PROTOCOL_V2.md).
 - **Alerts** (`app/alerts`):
   - approaching support/resistance, breakout and retest confirmations, triggers,
     invalidations, swing candidates, target/stop hits, your price levels, and data-stale
