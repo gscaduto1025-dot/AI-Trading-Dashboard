@@ -18,7 +18,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from analyze import boot_ci, features, summary  # noqa: E402
+import analyze  # noqa: E402
+from analyze import features, summary  # noqa: E402
+
+
+def boot_ci(xs: list[float], reps: int = 5000):
+    """Seeded percentile bootstrap of the mean (as analyze.boot_ci, sampling with the
+    C-level random.choices so 10,000-trade groups stay fast)."""
+    if len(xs) < 2:
+        return None
+    import random
+    rng = random.Random(analyze.RNG_SEED + len(xs))
+    n = len(xs)
+    means = sorted(sum(rng.choices(xs, k=n)) / n for _ in range(reps))
+    return [round(means[int(0.025 * reps)], 3), round(means[int(0.975 * reps) - 1], 3)]
+
+
+analyze.boot_ci = boot_ci  # summary() uses the same sampler
 
 VAL = Path(__file__).resolve().parent / "validation"
 COST_K = (0.0, 0.2, 0.25, 0.5, 1.0, 2.0)  # x0.2 ~ the measured NBBO entry cost
@@ -56,6 +72,16 @@ def verdict(s: dict) -> str:
     if ci[0] > 0:
         return "positive (95% CI above 0)"
     return "inconclusive (95% CI includes 0)"
+
+
+def _slots(di: dict) -> int:
+    """Regular-session 5-minute slots between a series' first and last candle."""
+    from datetime import date as _d
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from app.market.calendar import MarketCalendar
+    a, b = _d.fromisoformat(di["first"][:10]), _d.fromisoformat(di["last"][:10])
+    return sum(int((s.close - s.open).total_seconds() // 300)
+               for s in MarketCalendar().trading_days(a, b))
 
 
 def iso(ts):
@@ -130,6 +156,9 @@ def main() -> None:
                 c["last"] = max(filter(None, [c.get("last"), di.get("last")]), default=None)
                 c["missing_sessions"] = c.get("missing_sessions", 0) + di.get("missing_sessions", 0)
                 c["issues"] += di.get("issues") or []
+                c["bars"] = c.get("bars", 0) + (di.get("bars") or 0)
+                if rec["mode"] == "day" and di.get("first"):
+                    c["expected_slots"] = c.get("expected_slots", 0) + _slots(di)
             elif di.get("timeframe") == "volume":
                 d["coverage"].setdefault(rec["symbol"], {"runs": 0, "issues": []})["issues"] += \
                     [f"volume: {x}" for x in di.get("issues") or []]
@@ -141,6 +170,8 @@ def main() -> None:
         for x in rec["skipped"] + rec["not_live"]:
             lu["rejected_signal_seen"] = max(lu["rejected_signal_seen"], x.get("seen_at") or 0)
         d["symbols"].add(rec["symbol"])
+        sbs = d.setdefault("signals_by_symbol", {})
+        sbs[rec["symbol"]] = sbs.get(rec["symbol"], 0) + rec["signals_detected"]
         d["data_errors"] += [e | {"run": rec["run"]} for e in rec["data_errors"]]
         d["signals"] += rec["signals_detected"]
         d["not_live"] += len(rec["not_live"])
@@ -166,6 +197,13 @@ def main() -> None:
             "period": proto[m]["period"],
             "sector_sources": {s: sector_src.get((m, s)) for s in want}}
         del out["data"][m]["symbols"]
+        for c in d["coverage"].values():
+            if c.get("expected_slots"):
+                c["iex_5min_fill"] = round(c["bars"] / c["expected_slots"], 3)
+        out["data"][m]["zero_signal_symbols"] = sorted(
+            s for s in d["symbols"] if not any(r["ticker"] == s and r["mode"] == m for r in rows)
+            and not d["signals_by_symbol"].get(s))
+        del out["data"][m]["signals_by_symbol"]
     for mode in sorted({r["mode"] for r in rows}):
         rs = [r for r in rows if r["mode"] == mode]
         h2 = [r for r in rs if r["htf_points"] and r["htf_points"] >= 14]
