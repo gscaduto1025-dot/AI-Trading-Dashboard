@@ -690,8 +690,9 @@ measured volume in the quality score. If the SIP request fails, every candle fal
 to the labelled proxy.
 
 Coverage per symbol is in the strategy and swing APIs (`symbols.<T>.volume`) and on the
-scanner ticker cards (`volume`). Backtests and `as_of` replays label the history's volume
-scope but do not overlay SIP: on the IEX feed their volume conditions are UNVERIFIED.
+scanner ticker cards (`volume`). Backtests and `as_of` replays use the same overlay and
+liquidity rules at the replayed moment (the 16-minute embargo applies to that moment); see
+[docs/BACKTESTING.md](BACKTESTING.md).
 
 **Liquidity on the IEX feed.** The `min_avg_dollar_volume` gate (day and swing) is
 evaluated on consolidated (SIP) daily volume of the 20 sessions before the current one.

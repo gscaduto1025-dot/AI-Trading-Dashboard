@@ -121,6 +121,40 @@ def _iso(ts: int | None) -> str | None:
     return datetime.fromtimestamp(ts, NY).isoformat() if ts else None
 
 
+# ---- consolidated (SIP) volume on the free plan: shared by live service and backtests
+SIP_EMBARGO_SECONDS = 15 * 60 + 60  # free plan: SIP older than 15 min (+ 1 min grace)
+OVERLAY_STEP = {"5Min": 300, "15Min": 900, "1Day": 3600, "1Week": 3600}
+LIQUIDITY_SESSIONS = 20
+
+
+def sip_covered_until(decided_at: datetime, tf: str) -> int | None:
+    """The newest candle end whose consolidated volume a free-plan user could have had at
+    `decided_at` (15-minute SIP embargo + 1 minute grace), floored to the timeframe's step.
+    Used for live decisions and, with the replayed decision time, for backtests."""
+    step = OVERLAY_STEP.get(tf)
+    if step is None:
+        return None
+    return int((decided_at - timedelta(seconds=SIP_EMBARGO_SECONDS)).timestamp()) // step * step
+
+
+def liquidity_from_daily(sip_daily: list[Bar], current: date,
+                         fetched_at: datetime | None = None) -> dict | None:
+    """Average daily dollar volume over the last 20 sessions before `current`, from
+    consolidated daily bars (None when fewer than 10 such sessions exist)."""
+    recent = [b for b in sip_daily if ny_date(b.time) < current][-LIQUIDITY_SESSIONS:]
+    if len(recent) < LIQUIDITY_SESSIONS // 2:
+        return None
+    out = {"adv": sum(b.close * b.volume for b in recent) / len(recent),
+           "sessions": len(recent), "basis": "consolidated volume (SIP)",
+           "feed": "sip", "feed_label": "SIP (consolidated, historical daily bars)",
+           "first_session": ny_date(recent[0].time).isoformat(),
+           "last_session": ny_date(recent[-1].time).isoformat(),
+           "excludes_session": current.isoformat()}
+    if fetched_at is not None:
+        out["fetched_at"] = fetched_at.astimezone(NY).isoformat(timespec="seconds")
+    return out
+
+
 class MarketDataService:
     def __init__(self, source: Source, *, symbols: list[str],
                  now_fn: Callable[[], datetime] | None = None,
@@ -336,9 +370,9 @@ class MarketDataService:
         self._cache.put(key, result, ttl, self._mono())
         return result
 
-    LIQUIDITY_SESSIONS = 20
+    LIQUIDITY_SESSIONS = LIQUIDITY_SESSIONS
 
-    def consolidated_liquidity(self, symbol: str) -> dict | None:
+    def consolidated_liquidity(self, symbol: str, as_of: datetime | None = None) -> dict | None:
         """Average daily dollar volume (close x volume) over the last 20 completed sessions
         before the current one, from consolidated (SIP) daily bars.
 
@@ -346,11 +380,13 @@ class MarketDataService:
         consolidated volume - so a dollar-volume floor meant for market-wide liquidity
         cannot be applied to it. Those sessions are all more than 15 minutes old, which
         Alpaca's free plan allows for SIP. Returns None when not applicable or unavailable
-        (callers then fall back to the feed's own volume and say so)."""
+        (callers then fall back to the feed's own volume and say so). `as_of`: the
+        sessions before the one in progress at that moment (point-in-time replays)."""
         if self.source.is_demo or self.feed.bars_feed != "iex":
             return None
         now = self.now()
-        current = self.calendar.last_session_started(self.cutoff(now), "regular").day
+        moment = self.cutoff(now) if as_of is None else min(as_of, self.cutoff(now))
+        current = self.calendar.last_session_started(moment, "regular").day
         key = ("liquidity", symbol.upper(), current.isoformat())
         cached = self._cache.get(key, self._mono())
         if cached is not None:
@@ -363,22 +399,15 @@ class MarketDataService:
             log.warning("Consolidated volume unavailable for %s: %s", symbol, exc)
             self._cache.put(key, exc, 600.0, self._mono())
             return None
-        recent = [b for b in raw if ny_date(b.time) < current][-self.LIQUIDITY_SESSIONS:]
-        if len(recent) < self.LIQUIDITY_SESSIONS // 2:
+        out = liquidity_from_daily(raw, current, now)
+        if out is None:
             self._cache.put(key, DataError("too few consolidated sessions"), 600.0, self._mono())
             return None
-        out = {"adv": sum(b.close * b.volume for b in recent) / len(recent),
-               "sessions": len(recent), "basis": "consolidated volume (SIP)",
-               "feed": "sip", "feed_label": "SIP (consolidated, historical daily bars)",
-               "first_session": ny_date(recent[0].time).isoformat(),
-               "last_session": ny_date(recent[-1].time).isoformat(),
-               "excludes_session": current.isoformat(),
-               "fetched_at": now.astimezone(NY).isoformat(timespec="seconds")}
         self._cache.put(key, out, 6 * 3600.0, self._mono())
         return out
 
-    SIP_EMBARGO_SECONDS = 15 * 60 + 60  # free plan: SIP older than 15 min (+ 1 min grace)
-    OVERLAY_STEP = {"5Min": 300, "15Min": 900, "1Day": 3600, "1Week": 3600}
+    SIP_EMBARGO_SECONDS = SIP_EMBARGO_SECONDS
+    OVERLAY_STEP = OVERLAY_STEP
 
     @property
     def volume_scope(self) -> str:
@@ -390,8 +419,9 @@ class MarketDataService:
     def volume_overlay(self, symbol: str, tf: str, bars: list[Bar],
                        until: datetime | None = None):
         """Consolidated (SIP) volume for `bars` (IEX candles of `tf`) wherever Alpaca's
-        free plan provides it: candles ending at least 16 minutes ago (and no later than
-        `until`, for point-in-time replays). Returns a strategies.volume.VolumeOverlay, or
+        free plan provides it: candles ending at least 16 minutes before the decision
+        moment - now, or `until` for point-in-time replays (the embargo applies to the
+        replayed moment too, so a replay never sees SIP data a user could not have had). Returns a strategies.volume.VolumeOverlay, or
         None when not applicable (consolidated/demo feed) or unavailable (the caller then
         labels relative volume LIMITED/UNVERIFIED instead of treating IEX as the market).
 
@@ -401,10 +431,8 @@ class MarketDataService:
         step = self.OVERLAY_STEP.get(tf)
         if self.volume_scope != "partial" or step is None or not bars:
             return None
-        limit = self.now() - timedelta(seconds=self.SIP_EMBARGO_SECONDS)
-        if until is not None:
-            limit = min(limit, until)
-        covered = int(limit.timestamp()) // step * step
+        moment = self.now() if until is None else min(self.now(), until)
+        covered = sip_covered_until(moment, tf)
         first = min(b.time for b in bars)
         start = datetime.fromtimestamp(first, NY).replace(hour=0, minute=0, second=0)
         if first >= covered:

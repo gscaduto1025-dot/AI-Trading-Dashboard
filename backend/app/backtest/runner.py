@@ -5,15 +5,17 @@ No order is ever sent anywhere: trades exist only in the result.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timedelta
 
 from ..market.calendar import NY, MarketCalendar
 from . import metrics as M
 from .config import EXEC_TF, BacktestConfig
 from .data import HistoryProvider
+from .eligibility import find_entry
 from .execution import simulate
 from .regime import regime_at
-from .replay import load_series, replay_symbol
+from .replay import load_series, load_sip, replay_symbol
 
 MAX_DAYS = {"day": 190, "swing": 366 * 15}  # calendar-day span limits per run
 
@@ -40,6 +42,11 @@ LIMITATIONS = [
     "adjustment.",
     "Market regimes change. A small number of trades, or results concentrated in one "
     "ticker or period, is weak evidence.",
+    "Trades are taken only when the live scanner would have shown the signal as currently "
+    "actionable at that moment (same entry rules, same point-in-time volume and liquidity "
+    "data, feed delay included). On the IEX feed, consolidated volume covers a candle only "
+    "16 minutes after it closes, as on Alpaca's free plan; signals whose volume could not "
+    "be verified in time are listed as detected but not traded.",
 ]
 
 
@@ -86,7 +93,7 @@ def run_backtest(provider: HistoryProvider, *, mode: str, symbols: list[str], st
     if not symbols:
         raise ValueError("no symbols to test")
     trades, skipped, rejected, data_reports, data_errors = [], [], [], [], []
-    evaluations = 0
+    evaluations = detected = 0
     market = _market_daily(provider, start, end, cal)
     regime_basis = "SPY (broad market)" if market else "each ticker's own daily candles"
     jobs = [(m, sym) for m in modes for sym in symbols]
@@ -103,8 +110,13 @@ def run_backtest(provider: HistoryProvider, *, mode: str, symbols: list[str], st
         if not series[EXEC_TF[md]].bars:
             data_errors.append({"symbol": sym, "mode": md, "error": "no candles in the period"})
             continue
+        sip, notes = load_sip(provider, sym, md, start, end, cal)
+        if notes:
+            data_reports.append({"symbol": sym, "timeframe": "volume", "mode": md,
+                                 "issues": notes})
         sigs, rej, ev = replay_symbol(sym, md, start, end, series, cal, engine_cfg,
-                                      exhaustive=cfg.exhaustive, progress=prog)
+                                      exhaustive=cfg.exhaustive, progress=prog, sip=sip)
+        detected += len(sigs)
         evaluations += ev
         rejected += [r | {"mode": md} for r in rej]
         regime_src = market or series["1Day"]
@@ -124,10 +136,20 @@ def run_backtest(provider: HistoryProvider, *, mode: str, symbols: list[str], st
             if cfg.one_position_per_setup and open_until.get(lineage, 0) > sig["confirmed_at"]:
                 skipped.append(base | {"reason": "a position from the same setup was still open"})
                 continue
-            bars = series[EXEC_TF[md]].after(sig["confirmed_at"])
-            trade, skip = simulate(sig, bars, cfg, md)
+            # Historical detection is not an entry: trade only where the live scanner would
+            # have shown it as CURRENTLY_ACTIONABLE (same rules and point-in-time data).
+            j, info = find_entry(sym, sig, md, series, cal, engine_cfg, cfg, sip)
+            if j is None:
+                skipped.append(base | {k: v for k, v in info.items() if k != "setup"})
+                continue
+            bars = series[EXEC_TF[md]].after(sig["confirmed_at"])[j:]
+            trade, skip = simulate(sig, bars, replace(cfg, entry_delay_bars=0), md)
             if trade:
                 trade["regime"] = regime_at(regime_src, sig["confirmed_at"])
+                trade["signal_state_at_entry"] = "CURRENTLY_ACTIONABLE"
+                trade["volume_confirmation"] = info["setup"].get("volume_confirmation")
+                trade["entry_decided_at"] = info["decided_at"]
+                trade["entry_checks"] = info["entry_checks"]
                 trades.append(trade)
                 open_until[lineage] = trade["exit_time"]
             else:
@@ -143,6 +165,11 @@ def run_backtest(provider: HistoryProvider, *, mode: str, symbols: list[str], st
         "survivorship_biased": not universe,
         "universe": universe, "settings": cfg.to_dict(), "regime_basis": regime_basis,
         "trades": trades, "skipped": skipped, "not_live": rejected,
+        "signals_detected": detected,
+        "volume": {"scope": engine_cfg.get("volume_scope", "consolidated"),
+                   "feed": engine_cfg.get("volume_label"),
+                   "partial_volume_policy": engine_cfg["planning"].partial_volume_policy,
+                   "feed_delay_seconds": engine_cfg.get("feed_delay", 0)},
         "data_integrity": data_reports, "data_errors": data_errors,
         "engine_evaluations": evaluations,
         "limitations": LIMITATIONS,

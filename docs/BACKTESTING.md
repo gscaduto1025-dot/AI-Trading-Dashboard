@@ -40,13 +40,44 @@ Both use the live planning rules and the live lookback windows (`Service.STRATEG
      Tests assert both modes produce identical signals for day and swing.
 4. **All strategies always run.** Strategy, ticker and timeframe filters are applied to the
    results, never to the engine, because cross-strategy conflicts change live statuses.
+5. **Same point-in-time inputs as live** (`replay.pit_inputs`): the engine sees candles
+   completed by the data cutoff (decision time minus the feed's delay, e.g. 15 minutes on
+   delayed SIP) - the last N completed candles per timeframe, exactly the live windows. On
+   the IEX feed, consolidated (SIP) volume is overlaid only on candles that ended at least
+   16 minutes before the decision (`market.service.sip_covered_until`), newer candles keep
+   the IEX proxy labelled UNVERIFIED or LIMITED (`partial_volume_policy`), and the
+   liquidity gate uses consolidated daily volume of the 20 prior sessions
+   (`market.service.liquidity_from_daily`). SIP history is fetched once per run; if it is
+   unavailable, the run's data report says so and those decisions use the IEX proxy.
+
+## Detected signals vs trades (`backend/app/backtest/eligibility.py`)
+
+A replayed signal is a *historical trigger*. It becomes a trade only at the first execution
+candle at which the live scanner would have shown it as **CURRENTLY_ACTIONABLE**. The check
+is the scanner's own `strategies.entry.entry_checks`, with the engine re-evaluated at that
+moment:
+- decision time = the candle's open (daily candles: the session open), never before the
+  signal reached a live user (close + feed delay);
+- live price = that open: inside the entry zone, stop / T1 / invalidation not reached,
+  reward/risk from it at least the minimum;
+- day trades: inside the entry window; every trigger at most `max_entry_age_candles` old;
+- volume confirmation as shown live then: an IEX-only (UNVERIFIED) trigger can be entered
+  only once consolidated volume covers its candle and confirms it, if it is still fresh.
+
+The search stops at the entry, at a check that can never pass again, when the setup is no
+longer TRIGGERED, or at the session end (day). Every trade stores `entry_checks`,
+`volume_confirmation` and `entry_decided_at`; untraded signals are listed as skipped with
+the failed checks. `signals_detected` counts detections; the trade count counts entries.
+`tests/test_backtest_parity.py` replays identical moments through the live Service and the
+backtest and asserts equal decisions, and that every backtest trade was CURRENTLY_ACTIONABLE
+in the live scanner.
 
 ## Hypothetical execution (`backend/app/backtest/execution.py`)
 
 | Assumption | Default (day / swing) | Notes |
 | --- | --- | --- |
-| Entry | market order at the open of the first candle after the signal candle closes | `entry_delay_bars` adds whole candles of delay; the seconds between close and order are covered by slippage |
-| No-chase rule | skip if that open is outside the plan's entry zone | the live plan would not be taken there either |
+| Entry | market order at the open of the first candle at which the signal was currently actionable (see above); normally the first candle after the signal candle closes | `entry_delay_bars` adds whole candles of delay; the seconds between close and order are covered by slippage |
+| No-chase rule | skip if that open is outside the plan's entry zone | always enforced by the live entry rules; `respect_entry_zone` only affects the execution model's own check |
 | Gap checks | skip if the open is already through the stop, or at/through T1 | reported as skipped signals |
 | Half spread | 2 bps / 2 bps per market order | fixed assumption, not historical quotes |
 | Slippage | 3 bps / 5 bps on market and stop orders | adverse |

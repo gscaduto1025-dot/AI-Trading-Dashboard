@@ -10,7 +10,6 @@ import uuid
 from datetime import date, datetime
 
 from ..market.calendar import NY
-from ..strategies.volume import VolumeSource
 from .config import EXEC_TF, BacktestConfig
 from .data import BUNDLED, BundledHistory, MarketHistory, validate_series
 from .runner import LIMITATIONS, MAX_DAYS, report, run_backtest
@@ -22,6 +21,15 @@ MAX_SYMBOLS = 30
 
 class BacktestBusy(Exception):
     pass
+
+
+def engine_config(svc, provider, *_) -> dict:
+    """The live engines' configuration plus what the history's volume represents and the
+    feed delay, so replays use the same point-in-time rules as the live scanner."""
+    return {"strategy": svc.strategy_config, "swing": svc.swing_config,
+            "planning": svc.planning_config,
+            "volume_scope": provider.volume_scope, "volume_label": provider.feed_label,
+            "feed_delay": provider.feed_delay_seconds}
 
 
 class BacktestManager:
@@ -119,12 +127,7 @@ class BacktestManager:
                 provider, mode=req["mode"], symbols=req["symbols"],
                 start=date.fromisoformat(req["start"]), end=date.fromisoformat(req["end"]),
                 cal=svc.market.calendar,
-                engine_cfg={"strategy": svc.strategy_config, "swing": svc.swing_config,
-                            "planning": svc.planning_config,
-                            "volume": None if req["data_source"] == "bundled" else
-                            VolumeSource(svc.market.volume_scope,
-                                         "DEMO" if svc.is_demo else svc.market.feed.label,
-                                         svc.planning_config.partial_volume_policy)},
+                engine_cfg=engine_config(svc, provider),
                 settings=req["settings"], universe=req["universe"], progress=progress)
             rep = report(run)
             summary = {"trades": rep["overall"].get("trades", 0),

@@ -35,7 +35,7 @@ from .market.service import CandleSet, MarketDataService
 from .market.sources import AlpacaSource
 from .levels.engine import InsufficientData, compute_key_levels
 from .levels.model import FETCH_LIMIT, MODE_FRAMES
-from .market.timeframes import SPECS, lookback_start, spec
+from .market.timeframes import SPECS, bar_end, lookback_start, spec
 from .strategies.common import TRIGGERED, signal_id
 from .strategies.config import StrategyConfig, load_strategy_config
 from .strategies.engine import STRATEGIES, evaluate_symbol
@@ -110,7 +110,8 @@ class Service:
         # Every candle length the live engines request: one provider download covers all.
         lengths = {(tf, FETCH_LIMIT.get(tf, 300)) for frames in MODE_FRAMES.values()
                    for tf in frames}
-        lengths |= set(self.STRATEGY_FRAMES.items()) | set(self.SWING_FRAMES.items())
+        lengths |= {(tf, n + 1) for tf, n in (*self.STRATEGY_FRAMES.items(),
+                                                *self.SWING_FRAMES.items())}
         for tf, limit in sorted(lengths):
             self.market.reserve_lookback(tf, limit)
         self.trade_log = TradeLog(self.db, self.market)
@@ -238,7 +239,7 @@ class Service:
             except DataError as exc:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
-            liquidity = market.consolidated_liquidity(sym) if as_of is None else None
+            liquidity = market.consolidated_liquidity(sym, as_of=as_of)
             volume = self.volume_source(sym, frames, ("5Min", "15Min"), when)
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in ("5Min", "15Min")),
@@ -308,15 +309,23 @@ class Service:
         frames, problems = {}, []
         for tf, limit in self.STRATEGY_FRAMES.items():
             if replay:
-                start = lookback_start(spec(tf), market.calendar, when, limit, "regular")
-                frames[tf] = market.get_history(sym, tf, start, when).bars
+                start = lookback_start(spec(tf), market.calendar, when, limit + 1, "regular")
+                frames[tf] = self._window(tf, market.get_history(sym, tf, start, when).bars,
+                                          when, limit)
                 continue
-            candles = market.get_candles(sym, tf, "regular", limit)
+            candles = market.get_candles(sym, tf, "regular", limit + 1)
             block = candles.analysis_block()
             if block and block[0] != "INSUFFICIENT_DATA":
                 problems.append(f"{SPECS[tf].label} data: {block[1]}")
-            frames[tf] = candles.bars
+            frames[tf] = self._window(tf, candles.bars, when, limit)
         return frames, problems
+
+    def _window(self, tf: str, bars: list, when: datetime, limit: int) -> list:
+        """The engines' input window: the last `limit` candles COMPLETED at `when` - the
+        same definition in live scans, point-in-time replays and backtests
+        (backtest.data.Series.completed), so identical moments give identical inputs."""
+        s, cal, t = spec(tf), self.market.calendar, when.timestamp()
+        return [b for b in bars if bar_end(b, s, cal, "regular") <= t][-limit:]
 
     def _record_signals(self, setups: list[dict]) -> list[str]:
         """Append every accepted trigger to the immutable signal log; returns new ids."""
@@ -356,7 +365,7 @@ class Service:
             except DataError as exc:
                 per_symbol[sym] = {"status": "unavailable", "error": str(exc), "code": exc.code}
                 continue
-            liquidity = market.consolidated_liquidity(sym) if as_of is None else None
+            liquidity = market.consolidated_liquidity(sym, as_of=as_of)
             volume = self.volume_source(sym, frames, self.SWING_REQUIRED, when)
             key = (sym, when.timestamp() if as_of is not None else None,
                    *(frames[tf][-1].time if frames.get(tf) else 0 for tf in self.SWING_FRAMES),
@@ -392,16 +401,17 @@ class Service:
         frames, problems = {}, []
         for tf, limit in self.SWING_FRAMES.items():
             if replay:
-                start = lookback_start(spec(tf), market.calendar, when, limit, "regular")
+                start = lookback_start(spec(tf), market.calendar, when, limit + 1, "regular")
                 try:
-                    frames[tf] = market.get_history(sym, tf, start, when).bars
+                    frames[tf] = self._window(
+                        tf, market.get_history(sym, tf, start, when).bars, when, limit)
                 except DataError:
                     if tf in self.SWING_REQUIRED:
                         raise
                     frames[tf] = []
                 continue
             try:
-                candles = market.get_candles(sym, tf, "regular", limit)
+                candles = market.get_candles(sym, tf, "regular", limit + 1)
             except DataError:
                 if tf in self.SWING_REQUIRED:
                     raise
@@ -414,7 +424,7 @@ class Service:
                 else:
                     frames[tf] = []
                     continue
-            frames[tf] = candles.bars
+            frames[tf] = self._window(tf, candles.bars, when, limit)
         return frames, problems
 
     def _record_swing_signals(self, setups: list[dict]) -> list[str]:

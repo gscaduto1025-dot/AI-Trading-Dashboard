@@ -12,7 +12,7 @@ from __future__ import annotations
 import bisect
 import csv
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from ..data.base import Bar, DataError
@@ -142,14 +142,27 @@ class Series:
 
 
 class HistoryProvider:
-    """Interface: bars(symbol, timeframe, start, end) -> list[Bar]."""
+    """Interface: bars(symbol, timeframe, start, end) -> list[Bar].
+
+    `volume_scope` says what the bars' volume represents, exactly as for the live feed:
+    "consolidated" (all US venues), "partial" (IEX only) or "demo". `feed_delay_seconds`
+    is how long after a candle closes a live user of this feed would see it. A partial
+    feed may also offer `sip_bars` (consolidated history) for the volume overlay."""
 
     name = "base"
     is_demo = False
     description = ""
+    volume_scope = "consolidated"
+    feed_label = "feed"
+    feed_delay_seconds = 0
 
     def bars(self, symbol: str, tf: str, start: datetime, end: datetime) -> list[Bar]:
         raise NotImplementedError
+
+    def sip_bars(self, symbol: str, tf: str, start: datetime,
+                 end: datetime) -> list[Bar] | None:
+        """Consolidated (SIP) candles, or None when not offered/applicable."""
+        return None
 
 
 class MarketHistory(HistoryProvider):
@@ -162,9 +175,29 @@ class MarketHistory(HistoryProvider):
         self.is_demo = market.source.is_demo
         self.description = ("DEMO DATA - simulated prices, not market history" if self.is_demo
                             else f"Alpaca {market.feed.label} historical candles")
+        self.volume_scope = market.volume_scope
+        self.feed_label = "DEMO" if self.is_demo else market.feed.label
+        self.feed_delay_seconds = market.feed.delay_seconds
 
     def bars(self, symbol, tf, start, end):
         return self.market.get_history(symbol, tf, start, end, any_symbol=True).bars
+
+    def sip_bars(self, symbol, tf, start, end):
+        """Consolidated history for an IEX-feed backtest. Fetched only up to 16 minutes
+        ago (the free plan's SIP embargo); each replayed decision then uses only the part
+        a user could have had at that moment (see replay.pit_inputs)."""
+        if self.volume_scope != "partial":
+            return None
+        from ..market.service import SIP_EMBARGO_SECONDS
+        latest = self.market.now() - timedelta(seconds=SIP_EMBARGO_SECONDS)
+        end = min(end, latest)
+        if start >= end:
+            return []
+        try:
+            return self.market.source.fetch_bars(symbol.upper(), spec(tf).fetch, start, end,
+                                                 max_items=200_000, feed="sip")
+        except DataError:
+            return None
 
 
 class BundledHistory(HistoryProvider):
@@ -172,6 +205,8 @@ class BundledHistory(HistoryProvider):
 
     name = "bundled"
     description = "Bundled real daily candles: " + "; ".join(v[1] for v in BUNDLED.values())
+    volume_scope = "consolidated"  # daily volume as traded on all venues
+    feed_label = "bundled"
 
     def bars(self, symbol, tf, start, end):
         if symbol not in BUNDLED:
