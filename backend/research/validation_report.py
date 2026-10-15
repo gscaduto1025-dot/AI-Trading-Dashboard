@@ -10,9 +10,11 @@ Usage (from backend/): .venv/bin/python research/validation_report.py <run.jsonl
 
 from __future__ import annotations
 
+import gzip
 import json
 import math
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -43,6 +45,23 @@ def pval(xs: list[float]) -> float | None:
     return round(math.erfc(abs(m / (sd / math.sqrt(n))) / math.sqrt(2)), 5)
 
 
+def verdict(s: dict) -> str:
+    """Descriptive label from the net-R bootstrap CI (per-group CIs are not multiplicity
+    adjusted; only the pre-registered endpoints are confirmatory)."""
+    ci = s.get("exp_ci")
+    if s["n"] < MIN_N or not ci:
+        return "insufficient sample (< 30 trades)"
+    if ci[1] < 0:
+        return "negative (95% CI below 0)"
+    if ci[0] > 0:
+        return "positive (95% CI above 0)"
+    return "inconclusive (95% CI includes 0)"
+
+
+def iso(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat() if ts else None
+
+
 def block(rows: list[dict], costs: bool = False) -> dict:
     if not rows:
         return {"n": 0}
@@ -50,8 +69,7 @@ def block(rows: list[dict], costs: bool = False) -> dict:
     s["max_dd_r"] = max_dd(rows)
     s["gross_exp_r"] = round(sum(r["gross_r"] for r in rows) / len(rows), 3)
     s["mean_cost_r"] = round(sum(r["cost_r"] for r in rows) / len(rows), 3)
-    if len(rows) < MIN_N:
-        s["anecdotal"] = True
+    s["verdict"] = verdict(s)
     if costs:
         s["cost_sensitivity"] = {}
         for k in COST_K:
@@ -84,17 +102,44 @@ def holm(ps: dict) -> dict:
 
 
 def main() -> None:
-    recs = [json.loads(x) for p in sys.argv[1:] for x in open(p)]
-    sectors = {}
+    recs = [json.loads(x) for p in sys.argv[1:]
+            for x in (gzip.open(p, "rt") if p.endswith(".gz") else open(p))]
+    proto = json.loads((VAL / "protocol.json").read_text())["historical_validation"]
+    sealed = int(datetime(2026, 5, 1, 4, tzinfo=timezone.utc).timestamp())  # 00:00 ET
+    sectors, sector_src = {}, {}
     for f in VAL.glob("universe-*.json"):
         mode = f.name.split("-")[1]
         for r in json.loads(f.read_text())["selected"]:
             sectors[(mode, r["symbol"])] = r["sector"]
+            sector_src[(mode, r["symbol"])] = (
+                "current GICS (not point-in-time)" if r["sector_source"] == "current GICS"
+                else "GICS when it left the index (manual, not point-in-time)")
     rows, data = [], {}
     for rec in recs:
         d = data.setdefault(rec["mode"], {"symbols": set(), "data_errors": [], "signals": 0,
                                          "not_live": 0, "skipped": 0, "runtime_s": 0,
-                                         "rules_hash": set()})
+                                         "rules_hash": set(), "coverage": {},
+                                         "latest_used": {"signal": 0, "entry": 0, "exit": 0,
+                                                         "rejected_signal_seen": 0}})
+        ex = "5Min" if rec["mode"] == "day" else "1Day"
+        for di in rec["data_integrity"]:
+            if di.get("timeframe") == ex:
+                c = d["coverage"].setdefault(rec["symbol"], {"runs": 0, "issues": []})
+                c["runs"] += 1
+                c["first"] = min(filter(None, [c.get("first"), di.get("first")]), default=None)
+                c["last"] = max(filter(None, [c.get("last"), di.get("last")]), default=None)
+                c["missing_sessions"] = c.get("missing_sessions", 0) + di.get("missing_sessions", 0)
+                c["issues"] += di.get("issues") or []
+            elif di.get("timeframe") == "volume":
+                d["coverage"].setdefault(rec["symbol"], {"runs": 0, "issues": []})["issues"] += \
+                    [f"volume: {x}" for x in di.get("issues") or []]
+        lu = d["latest_used"]
+        for t in rec["trades"]:
+            lu["signal"] = max(lu["signal"], t["signal_time"])
+            lu["entry"] = max(lu["entry"], t["entry_time"])
+            lu["exit"] = max(lu["exit"], t["exit_time"])
+        for x in rec["skipped"] + rec["not_live"]:
+            lu["rejected_signal_seen"] = max(lu["rejected_signal_seen"], x.get("seen_at") or 0)
         d["symbols"].add(rec["symbol"])
         d["data_errors"] += [e | {"run": rec["run"]} for e in rec["data_errors"]]
         d["signals"] += rec["signals_detected"]
@@ -105,10 +150,22 @@ def main() -> None:
         for t in rec["trades"]:
             f = features(t, rec["mode"])
             f["sector"] = sectors.get((rec["mode"], t["ticker"]), "?")
+            f["sector_source"] = sector_src.get((rec["mode"], t["ticker"]), "?")
             f["strat_tf"] = f"{f['strategy']} {f['timeframe']}"
             rows.append(f)
-    out = {"data": {m: d | {"symbols": len(d["symbols"]), "rules_hash": sorted(d["rules_hash"])}
-                    for m, d in data.items()}, "modes": {}}
+    out = {"data": {}, "modes": {}}
+    for m, d in data.items():
+        want = proto[m]["symbols"]
+        lu = d["latest_used"]
+        out["data"][m] = d | {
+            "symbols_processed": len(d["symbols"]), "symbols_expected": len(want),
+            "missing_symbols": [s for s in want if s not in d["symbols"]],
+            "rules_hash": sorted(d["rules_hash"]),
+            "latest_used": {k: iso(v) for k, v in lu.items()},
+            "sealed_period_used": any(v >= sealed for v in lu.values()),
+            "period": proto[m]["period"],
+            "sector_sources": {s: sector_src.get((m, s)) for s in want}}
+        del out["data"][m]["symbols"]
     for mode in sorted({r["mode"] for r in rows}):
         rs = [r for r in rows if r["mode"] == mode]
         h2 = [r for r in rs if r["htf_points"] and r["htf_points"] >= 14]
