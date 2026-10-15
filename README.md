@@ -270,11 +270,11 @@ How the main areas are verified (see the test files in `backend/tests`):
   Intraday backtests on real data need Alpaca keys.
 - Runs over the current watchlist are survivorship-biased and flagged; supply a
   point-in-time universe to reduce this.
-- **Current evidence.** On the only real data available here, the swing strategies
-  produced 14 trades:
-  - expectancy +0.10 R, 95% CI −0.73 to +0.94 R;
-  - −0.63 % position-sized;
-  - verdict **INSUFFICIENT EVIDENCE**.
+- **Current evidence.** A frozen-protocol validation on 50 unseen, point-in-time selected
+  S&P 500 stocks (`backend/research/validation/`) found:
+  - day: 11,701 trades, −0.63 R per trade after modelled costs (95% CI −0.66 to −0.60);
+    +0.04 R before costs, and still negative at measured quote costs;
+  - swing: 227 trades, −0.22 R (95% CI −0.43 to −0.01); no swing strategy has a positive CI.
 
   No profitability is claimed. See [docs/BACKTESTING.md](docs/BACKTESTING.md).
 
