@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-15.
 **Branch:** `claude/exciting-gauss-kwqte7`.
-**Code audited:** from `0d3f271` (Phase 1). **Fixes in this phase:** `5711d60`, `b35d21d`, `2526e31`, `f32ab29`, `fddd784`.
+**Code audited:** from `0d3f271` (Phase 1). **Fixes in this phase:** `5711d60`, `b35d21d`, `2526e31`, `f32ab29`, `fddd784`. **Tools and results:** `3ac2e0d`.
 
 **Data:** Alpaca market data (IEX real-time feed; SIP consolidated history where the free plan allows it), read-only.
 
@@ -203,10 +203,10 @@ The undetected fault is **equivalent**: relative volume is checked twice, when t
 
 | Suite | Result |
 | --- | --- |
-| Backend (pytest), full | **BACKEND_RESULT** |
+| Backend (pytest), full | **PASS**: 462/462 (7 min 10 s); 444 before the last two fix commits, 430 at the start of Phase 2 |
 | Frozen-rule check | **PASS** (`rules_hash 12a8e177…`, `rule_surface 680c82f6…`) |
-| Frontend type check / lint / unit tests | **FRONTEND_RESULT** |
-| Frontend production build | **BUILD_RESULT** |
+| Frontend type check / lint / unit tests | **PASS**: tsc 0 errors, eslint 0 problems, vitest 17/17 |
+| Frontend production build | **PASS**: compiled with no errors or warnings |
 | Full-system integration (`scripts/integration.sh`, real Alpaca data, after the close) | **PASS**. API 13/13 (universe 12/12, 0 failed, 136 setups) and UI 8/8. The two failures in Phase 1 were the stale-data 503s during the outage. |
 | Focused swing tests (`tests/test_swing_focus.py`) | **PASS** (17/17) |
 
