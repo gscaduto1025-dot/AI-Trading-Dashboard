@@ -34,7 +34,10 @@ class WebhookNotifier:
 
     def deliver(self, alert: dict) -> str:
         """POST the alert; returns a short delivery status stored with the alert."""
-        body = {"text": _text(alert), "content": _text(alert), "alert": alert}
+        text = _text(alert)
+        if len(text) > 2000:  # Discord rejects content over 2000 characters
+            text = text[:1997] + "..."
+        body = {"text": text, "content": text, "alert": alert}
         try:
             r = self._client.post(self._url, json=body)
         except httpx.HTTPError as exc:

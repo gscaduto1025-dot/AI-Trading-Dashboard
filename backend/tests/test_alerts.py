@@ -458,3 +458,57 @@ def test_scheduler_creates_alerts_with_no_dashboard_open(tmp_path):
     # Nobody called the API: the server-side loop scanned and the alert engine ran.
     assert svc.scanner.scan_count >= 1 and svc.alerts.last_run is not None
     assert any(a["ticker"] == "NVDA" for a in svc.db.alerts())
+
+
+def test_repeated_scans_restarts_and_parallel_engines_send_one_webhook(tmp_path):
+    """Phase 2 audit: an actionable signal seen on every rescan, after a restart, by a
+    second engine on the same database (another process) and after lost engine state
+    produces exactly one stored alert and one webhook POST (e.g. one Discord message)."""
+    sent = []
+
+    def handler(request):
+        sent.append(request)
+        return httpx.Response(204)
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    db = Database(tmp_path / "w.db")
+    clock = Clock()
+    s = snap([row("TRIGGERED", trig_time=T0, outcome="open")])
+    eng = AlertEngine(db, clock=clock, notifier=WebhookNotifier("https://discord.example/x",
+                                                                client=client))
+    for _ in range(20):  # 20 scheduled rescans of the same candle
+        eng.process(s)
+        clock.t += 30
+    restarted = AlertEngine(db, clock=clock, notifier=WebhookNotifier(
+        "https://discord.example/x", client=client))
+    restarted.process(s)
+    other_process = AlertEngine(Database(tmp_path / "w.db"), clock=clock,
+                                notifier=WebhookNotifier("https://discord.example/x",
+                                                         client=client))
+    other_process.process(s)
+    db.put_state("engine", {})  # engine state lost: the database dedupe key still holds
+    clock.t += 7200
+    AlertEngine(db, clock=clock, notifier=WebhookNotifier("https://discord.example/x",
+                                                          client=client)).process(s)
+    actionable = [a for a in db.alerts() if a["actionable"]]
+    assert len(actionable) == 1
+    assert len(sent) == len(db.alerts())  # one POST per stored alert, never per scan
+    assert sum(b"setup_triggered" in r.content for r in sent) == 1
+
+
+def test_webhook_text_fits_discord_content_limit():
+    from app.alerts.webhook import _text
+
+    long_row = row("TRIGGERED", trig_time=T0, outcome="open")
+    long_row["entry_conditions"] = [{"name": "Condition with a long descriptive name " * 3,
+                                     "passed": True, "detail": "x"} for _ in range(12)]
+    out = AlertEngine(Database(":memory:"), clock=Clock()).process(snap([long_row]))
+    assert out
+    sent = []
+    n = WebhookNotifier("https://discord.example/x", client=httpx.Client(
+        transport=httpx.MockTransport(lambda r: sent.append(r) or httpx.Response(204))))
+    huge = {**out[0], "message": "x" * 5000}
+    assert len(_text(huge)) > 2000
+    n.deliver(huge)
+    import json as _json
+    assert len(_json.loads(sent[0].content)["content"]) == 2000
