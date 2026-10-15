@@ -389,11 +389,14 @@
   "primary_endpoint": "Net expectancy in R per trade (frozen costs), per mode, with a seeded bootstrap 95 % CI (5,000 resamples, seed 1). Expectation from development: day net about -0.47R, gross about +0.04R (CI includes 0).",
   "secondary_preregistered": [
    "gross expectancy (zero costs)",
-   "H2: higher timeframe aligned (quality component higher_timeframe > 0)",
+   "H2: higher timeframe aligned = quality component higher_timeframe >= 14 points (the 'aligned' bucket of research/analyze.py by_htf, as in development)",
    "H3: quality score >= 70",
    "H1 cost scenarios: costs scaled x0, x0.25, x0.5, x1, x2 (x0.2 is roughly the measured NBBO cost)"
   ],
-  "reporting": "By mode, strategy, timeframe, ticker, sector and direction: trades, win rate (Wilson CI), net expectancy (bootstrap CI), profit factor, max drawdown of cumulative R (1R per trade, ordered by exit time), cost sensitivity. Groups under 30 trades are flagged as anecdotal. Multiple comparisons: per-group CIs are descriptive; only the primary and secondary endpoints are confirmatory (Holm across the secondary ones)."
+  "reporting": "By mode, strategy, timeframe, ticker, sector and direction: trades, win rate (Wilson CI), net expectancy (bootstrap CI), profit factor, max drawdown of cumulative R (1R per trade, ordered by exit time), cost sensitivity. Groups under 30 trades are flagged as anecdotal. Multiple comparisons: per-group CIs are descriptive; only the primary and secondary endpoints are confirmatory (Holm across the secondary ones).",
+  "protocol_corrections": [
+   "2026-10-15, before any validation result was analysed: H2 definition corrected from 'higher_timeframe > 0' to '>= 14 points', the definition used in development (research/analyze.py by_htf)."
+  ]
  },
  "forward_paper_test": {
   "symbols": [
