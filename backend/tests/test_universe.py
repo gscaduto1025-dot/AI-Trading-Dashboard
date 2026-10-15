@@ -360,3 +360,33 @@ def test_raw_cache_module_does_not_change_frozen_code():
                          capture_output=True, text=True, check=True).stdout.strip()
     proto = _json.loads((backend / "research/validation/protocol.json").read_text())
     assert out == proto["protocol_amendments_data"]["rule_surface_sha256"]
+
+
+def test_concurrent_cache_saves_never_fail_or_corrupt(tmp_path):
+    """Phase 2 live finding: the periodic save, a universe run and shutdown saved the same file
+    at once; with a shared temp name one rename failed (ENOENT) and writers could interleave."""
+    a = _Market(10_000.0)
+    t0 = datetime(2026, 3, 10, tzinfo=timezone.utc)
+    for k in range(40):
+        bars = [Bar(1_773_100_000 + 300 * i, 1 + k, 2 + k, 0.5, 1.5, 100) for i in range(400)]
+        a._raw[(f"S{k}", "5Min")] = {"start": t0, "cutoff": t0 + timedelta(days=1), "bars": bars,
+                                     "fetched": 9_990.0, "full_at": 9_900.0}
+    f = tmp_path / "w.json.gz"
+    errors = []
+
+    def save():
+        try:
+            rawcache.save(a, f)
+        except Exception as exc:  # noqa: BLE001 - the test records any failure
+            errors.append(repr(exc))
+
+    threads = [threading.Thread(target=save) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert errors == []
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["w.json.gz"]  # no temp files left
+    b = _Market(10_000.0)
+    assert rawcache.restore(b, f)["restored"] == 40
+    assert b._raw[("S7", "5Min")]["bars"] == a._raw[("S7", "5Min")]["bars"]

@@ -21,6 +21,7 @@ import gzip
 import json
 import logging
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -30,6 +31,8 @@ from .data.base import Bar, DataError
 
 log = logging.getLogger("tradescope.rawcache")
 FORMAT = 1
+_SAVE_LOCKS: dict[str, threading.Lock] = {}
+_SAVE_LOCKS_GUARD = threading.Lock()
 
 
 def cache_dir() -> Path:
@@ -66,11 +69,20 @@ def save(market, path: Path) -> dict:
                                 for b in bars]})
     doc = {"format": FORMAT, "saved_at": wall, "identity": _identity(market), "series": series}
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    with gzip.open(tmp, "wt") as f:
-        json.dump(doc, f, separators=(",", ":"))
-    os.replace(tmp, path)
-    return {"series": len(series), "bars": nbars, "bytes": path.stat().st_size}
+    # One writer per file at a time, each with its own temp name: concurrent saves (the
+    # periodic save, a universe run and shutdown) used to share "<name>.tmp", so one rename
+    # failed (ENOENT) and two writers could interleave in the same temp file.
+    with _SAVE_LOCKS_GUARD:
+        lock = _SAVE_LOCKS.setdefault(str(path), threading.Lock())
+    with lock:
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        try:
+            with gzip.open(tmp, "wt") as f:
+                json.dump(doc, f, separators=(",", ":"))
+            os.replace(tmp, path)
+        finally:
+            tmp.unlink(missing_ok=True)
+        return {"series": len(series), "bars": nbars, "bytes": path.stat().st_size}
 
 
 def restore(market, path: Path) -> dict:
