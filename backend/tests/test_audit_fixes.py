@@ -86,3 +86,18 @@ def test_csv_export_defuses_formulas(client):
     assert r.status_code == 200
     csv = client.get("/api/journal/paper/export.csv").text
     assert "'=HYPERLINK" in csv and ",=HYPERLINK" not in csv and ',"=HYPERLINK' not in csv
+
+
+# ------------------------------------------------------- data-source labels (phase 2)
+
+def test_stale_data_is_never_labelled_with_the_feeds_nominal_latency():
+    from app.ai.facts import _source_label
+
+    fresh = {"feed_label": "IEX", "latency": "real-time", "freshness": "fresh"}
+    assert _source_label(fresh) == "IEX (real-time)"
+    stale = fresh | {"freshness": "stale",
+                     "reason": "Latest 5 minutes candle is 33 min old during an open session"}
+    label = _source_label(stale)
+    assert label.startswith("IEX (real-time feed; data STALE: Latest 5 minutes candle is 33")
+    assert "(real-time)" not in label
+    assert "UNAVAILABLE" in _source_label(fresh | {"freshness": "unavailable", "reason": None})

@@ -18,6 +18,17 @@ from ..validation import for_strategy
 FACTS_VERSION = "4"  # bump when the sheet layout or the prompt changes (cache key)
 
 
+
+def _source_label(status: dict) -> str:
+    """Feed and latency, e.g. "IEX (real-time)". The feed's nominal latency is never shown
+    alone for data that is not fresh: stale or unavailable data says so."""
+    label = f"{status.get('feed_label', 'market data')} ({status.get('latency', 'unknown latency')}"
+    freshness = status.get("freshness")
+    if freshness and freshness not in ("fresh", "demo"):
+        reason = status.get("reason")
+        label += f" feed; data {str(freshness).upper()}" + (f": {reason}" if reason else "")
+    return label + ")"
+
 def _iso(ts: int | None) -> str | None:
     return datetime.fromtimestamp(ts, NY).isoformat() if ts else None
 
@@ -123,8 +134,7 @@ def build_facts(analysis: dict, setup: dict | None, plan: dict | None, mode: str
         "data_timestamp": status.get("as_of") or _iso(analysis.get("analyzed_through")),
         "last_completed_candle": _iso(analysis.get("analyzed_through")),
         "data_source": ("DEMO DATA - simulated prices, not a real market read" if is_demo
-                        else f"{status.get('feed_label', 'market data')} "
-                             f"({status.get('latency', 'unknown latency')})"),
+                        else _source_label(status)),
         "last_price": price,
         "market_bias": {
             "label": (bias.get("label") or "Neutral").lower(),

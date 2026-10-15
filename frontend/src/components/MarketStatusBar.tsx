@@ -72,12 +72,18 @@ export default function MarketStatusBar({
         <span className="rounded bg-panel-2 px-1.5 py-0.5 text-[11px] font-semibold text-ink ring-1 ring-line">
           {feed ? (feed.source === "alpaca" ? `Alpaca · ${feed.label}` : "DEMO") : "—"}
         </span>
-        <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ring-1 ${LATENCY_STYLE[latency]}`}>
-          {LATENCY_LABEL[latency] ?? latency}
-        </span>
+        {/* Stale data is never labelled with the feed's nominal latency ("Real-time"). */}
+        {!stale && (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ring-1 ${LATENCY_STYLE[latency]}`}>
+            {LATENCY_LABEL[latency] ?? latency}
+          </span>
+        )}
         {stale && (
-          <span className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase text-bear ring-1 ring-bear/50" title={status?.reason ?? ""}>
-            Stale
+          <span
+            className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase text-bear ring-1 ring-bear/50"
+            title={`${LATENCY_LABEL[latency] ?? latency} feed, but the data is stale. ${status?.reason ?? ""}`}
+          >
+            Stale data
           </span>
         )}
       </div>
