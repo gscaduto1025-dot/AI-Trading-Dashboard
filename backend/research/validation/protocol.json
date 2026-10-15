@@ -413,5 +413,15 @@
   "starts": "2026-10-16 (first session after the freeze); never mixed with the historical validation.",
   "method": "research/forward_test.py replays each completed session with the frozen engine (same replay, entry-eligibility and volume rules as the live scanner; parity-tested) and appends the closed trades to research/validation/forward_ledger.jsonl. Entries are only appended, never rewritten. No orders are sent to any broker, paper or live.",
   "note": "The 2026-05-01 to 2026-10-15 sealed window is not part of the forward test."
+ },
+ "protocol_amendments": [
+  "Amendment 1, 2026-10-15: research/freeze.py `check` compares the rule surface instead of the whole app source, so presentation features (validation labels, scanner filters, presets, research dashboard) can be added without changing any rule. Rule surface = every file under app/strategies, swing, planning, backtest, levels, market, analysis, data, plus app/config.py and the live-path functions Service._window, volume_source, strategy_setups, swing_setups and scanner setup_row, entry_env, live_quote. Its sha256 is identical at the frozen commit a7e60d7 and at 625706c (the last commit before any app change). The engine-configuration and cost/execution hashes are still checked unchanged."
+ ],
+ "protocol_amendments_data": {
+  "rule_surface_sha256": "680c82f696a93cce11a7e986f35d9d5e1a3e4b88116c73844c10322f49720475",
+  "computed_at_commits": [
+   "a7e60d7",
+   "625706c"
+  ]
  }
 }
