@@ -1,0 +1,594 @@
+{
+ "t0": "2023-10-31",
+ "window": [
+  "2023-05-03",
+  "2023-10-31"
+ ],
+ "sessions": 126,
+ "candidates": 496,
+ "rule": {
+  "n": 50,
+  "sector_cap": 7,
+  "min_price": 10.0,
+  "min_coverage": 0.95,
+  "excluded_watchlist": [
+   "AAPL",
+   "AMD",
+   "AMZN",
+   "FB",
+   "META",
+   "MSFT",
+   "NVDA",
+   "QQQ",
+   "SPY",
+   "TSLA"
+  ]
+ },
+ "sector_counts": {
+  "Communication Services": 7,
+  "Information Technology": 7,
+  "Energy": 4,
+  "Health Care": 7,
+  "Financials": 7,
+  "Industrials": 4,
+  "Consumer Discretionary": 7,
+  "Consumer Staples": 6,
+  "Utilities": 1
+ },
+ "selected": [
+  {
+   "symbol": "GOOGL",
+   "median_dollar_volume": 3592964289,
+   "close_t0": 124.08,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 1
+  },
+  {
+   "symbol": "NFLX",
+   "median_dollar_volume": 2175367205,
+   "close_t0": 411.69,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 3
+  },
+  {
+   "symbol": "AVGO",
+   "median_dollar_volume": 1790237811,
+   "close_t0": 841.37,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 4
+  },
+  {
+   "symbol": "XOM",
+   "median_dollar_volume": 1598406242,
+   "close_t0": 105.85,
+   "coverage": 1.0,
+   "sector": "Energy",
+   "sector_source": "current GICS",
+   "liquidity_rank": 5
+  },
+  {
+   "symbol": "UNH",
+   "median_dollar_volume": 1402429671,
+   "close_t0": 535.56,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 6
+  },
+  {
+   "symbol": "ADBE",
+   "median_dollar_volume": 1348855423,
+   "close_t0": 532.06,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 7
+  },
+  {
+   "symbol": "JPM",
+   "median_dollar_volume": 1298011714,
+   "close_t0": 139.06,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 8
+  },
+  {
+   "symbol": "LLY",
+   "median_dollar_volume": 1264021628,
+   "close_t0": 553.93,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 9
+  },
+  {
+   "symbol": "INTC",
+   "median_dollar_volume": 1230389789,
+   "close_t0": 36.5,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 10
+  },
+  {
+   "symbol": "V",
+   "median_dollar_volume": 1225616548,
+   "close_t0": 235.1,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 11
+  },
+  {
+   "symbol": "BAC",
+   "median_dollar_volume": 1207963948,
+   "close_t0": 26.34,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 12
+  },
+  {
+   "symbol": "DIS",
+   "median_dollar_volume": 1189674879,
+   "close_t0": 81.59,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 13
+  },
+  {
+   "symbol": "CVX",
+   "median_dollar_volume": 1136385337,
+   "close_t0": 145.73,
+   "coverage": 1.0,
+   "sector": "Energy",
+   "sector_source": "current GICS",
+   "liquidity_rank": 14
+  },
+  {
+   "symbol": "JNJ",
+   "median_dollar_volume": 1111074462,
+   "close_t0": 148.34,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 15
+  },
+  {
+   "symbol": "BRK.B",
+   "median_dollar_volume": 1013670600,
+   "close_t0": 341.33,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 16
+  },
+  {
+   "symbol": "CRM",
+   "median_dollar_volume": 955776559,
+   "close_t0": 200.83,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 17
+  },
+  {
+   "symbol": "BA",
+   "median_dollar_volume": 952425685,
+   "close_t0": 186.82,
+   "coverage": 1.0,
+   "sector": "Industrials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 18
+  },
+  {
+   "symbol": "PYPL",
+   "median_dollar_volume": 950582280,
+   "close_t0": 51.8,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 19
+  },
+  {
+   "symbol": "MA",
+   "median_dollar_volume": 911993470,
+   "close_t0": 376.35,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 20
+  },
+  {
+   "symbol": "HD",
+   "median_dollar_volume": 909321831,
+   "close_t0": 284.69,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 21
+  },
+  {
+   "symbol": "ORCL",
+   "median_dollar_volume": 904974717,
+   "close_t0": 103.4,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 22
+  },
+  {
+   "symbol": "COST",
+   "median_dollar_volume": 878826258,
+   "close_t0": 552.44,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 23
+  },
+  {
+   "symbol": "PFE",
+   "median_dollar_volume": 861412278,
+   "close_t0": 30.56,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 24
+  },
+  {
+   "symbol": "MU",
+   "median_dollar_volume": 853113735,
+   "close_t0": 66.87,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 25
+  },
+  {
+   "symbol": "QCOM",
+   "median_dollar_volume": 849077209,
+   "close_t0": 108.99,
+   "coverage": 1.0,
+   "sector": "Information Technology",
+   "sector_source": "current GICS",
+   "liquidity_rank": 26
+  },
+  {
+   "symbol": "PEP",
+   "median_dollar_volume": 835812348,
+   "close_t0": 163.28,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 28
+  },
+  {
+   "symbol": "PG",
+   "median_dollar_volume": 833179252,
+   "close_t0": 150.03,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 30
+  },
+  {
+   "symbol": "WMT",
+   "median_dollar_volume": 774059930,
+   "close_t0": 163.41,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 31
+  },
+  {
+   "symbol": "KO",
+   "median_dollar_volume": 762093994,
+   "close_t0": 56.49,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 32
+  },
+  {
+   "symbol": "NKE",
+   "median_dollar_volume": 758948296,
+   "close_t0": 102.77,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 34
+  },
+  {
+   "symbol": "BKNG",
+   "median_dollar_volume": 751443960,
+   "close_t0": 2789.56,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 35
+  },
+  {
+   "symbol": "CMCSA",
+   "median_dollar_volume": 744184508,
+   "close_t0": 41.29,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 36
+  },
+  {
+   "symbol": "MRK",
+   "median_dollar_volume": 724079675,
+   "close_t0": 102.7,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 38
+  },
+  {
+   "symbol": "TMO",
+   "median_dollar_volume": 717908360,
+   "close_t0": 444.77,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 39
+  },
+  {
+   "symbol": "VZ",
+   "median_dollar_volume": 693142114,
+   "close_t0": 35.13,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 40
+  },
+  {
+   "symbol": "MCD",
+   "median_dollar_volume": 688314179,
+   "close_t0": 262.17,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 41
+  },
+  {
+   "symbol": "C",
+   "median_dollar_volume": 669434669,
+   "close_t0": 39.49,
+   "coverage": 1.0,
+   "sector": "Financials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 44
+  },
+  {
+   "symbol": "ABBV",
+   "median_dollar_volume": 658540271,
+   "close_t0": 141.18,
+   "coverage": 1.0,
+   "sector": "Health Care",
+   "sector_source": "current GICS",
+   "liquidity_rank": 45
+  },
+  {
+   "symbol": "TMUS",
+   "median_dollar_volume": 651789646,
+   "close_t0": 143.86,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 46
+  },
+  {
+   "symbol": "ABNB",
+   "median_dollar_volume": 648102600,
+   "close_t0": 118.29,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 47
+  },
+  {
+   "symbol": "CAT",
+   "median_dollar_volume": 615692917,
+   "close_t0": 226.05,
+   "coverage": 1.0,
+   "sector": "Industrials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 51
+  },
+  {
+   "symbol": "OXY",
+   "median_dollar_volume": 579150468,
+   "close_t0": 61.81,
+   "coverage": 1.0,
+   "sector": "Energy",
+   "sector_source": "current GICS",
+   "liquidity_rank": 55
+  },
+  {
+   "symbol": "TGT",
+   "median_dollar_volume": 563366934,
+   "close_t0": 110.79,
+   "coverage": 1.0,
+   "sector": "Consumer Staples",
+   "sector_source": "current GICS",
+   "liquidity_rank": 58
+  },
+  {
+   "symbol": "NEE",
+   "median_dollar_volume": 562970413,
+   "close_t0": 58.3,
+   "coverage": 1.0,
+   "sector": "Utilities",
+   "sector_source": "current GICS",
+   "liquidity_rank": 59
+  },
+  {
+   "symbol": "SBUX",
+   "median_dollar_volume": 561600291,
+   "close_t0": 92.24,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 60
+  },
+  {
+   "symbol": "DE",
+   "median_dollar_volume": 558025956,
+   "close_t0": 365.36,
+   "coverage": 1.0,
+   "sector": "Industrials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 61
+  },
+  {
+   "symbol": "T",
+   "median_dollar_volume": 540152170,
+   "close_t0": 15.4,
+   "coverage": 1.0,
+   "sector": "Communication Services",
+   "sector_source": "current GICS",
+   "liquidity_rank": 63
+  },
+  {
+   "symbol": "COP",
+   "median_dollar_volume": 531708465,
+   "close_t0": 118.8,
+   "coverage": 1.0,
+   "sector": "Energy",
+   "sector_source": "current GICS",
+   "liquidity_rank": 67
+  },
+  {
+   "symbol": "LOW",
+   "median_dollar_volume": 526526022,
+   "close_t0": 190.57,
+   "coverage": 1.0,
+   "sector": "Consumer Discretionary",
+   "sector_source": "current GICS",
+   "liquidity_rank": 68
+  },
+  {
+   "symbol": "UPS",
+   "median_dollar_volume": 523543397,
+   "close_t0": 141.25,
+   "coverage": 1.0,
+   "sector": "Industrials",
+   "sector_source": "current GICS",
+   "liquidity_rank": 69
+  }
+ ],
+ "skipped_in_order": [
+  {
+   "symbol": "GOOG",
+   "reason": "second share class"
+  },
+  {
+   "symbol": "CSCO",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "PANW",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "TXN",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "AMAT",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "INTU",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "LRCX",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "WFC",
+   "reason": "sector cap (Financials)"
+  },
+  {
+   "symbol": "DHR",
+   "reason": "sector cap (Health Care)"
+  },
+  {
+   "symbol": "NOW",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "ACN",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "GS",
+   "reason": "sector cap (Financials)"
+  },
+  {
+   "symbol": "AMGN",
+   "reason": "sector cap (Health Care)"
+  },
+  {
+   "symbol": "BMY",
+   "reason": "sector cap (Health Care)"
+  },
+  {
+   "symbol": "ADI",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "MS",
+   "reason": "sector cap (Financials)"
+  },
+  {
+   "symbol": "SCHW",
+   "reason": "sector cap (Financials)"
+  },
+  {
+   "symbol": "IBM",
+   "reason": "sector cap (Information Technology)"
+  },
+  {
+   "symbol": "CVS",
+   "reason": "sector cap (Health Care)"
+  }
+ ],
+ "excluded": [
+  {
+   "symbol": "AMCR",
+   "reason": "close 8.89 on 2023-10-31"
+  },
+  {
+   "symbol": "F",
+   "reason": "close 9.75 on 2023-10-31"
+  },
+  {
+   "symbol": "HBAN",
+   "reason": "close 9.65 on 2023-10-31"
+  },
+  {
+   "symbol": "VLTO",
+   "reason": "coverage 17%"
+  },
+  {
+   "symbol": "VTRS",
+   "reason": "close 8.9 on 2023-10-31"
+  },
+  {
+   "symbol": "WBD",
+   "reason": "close 9.94 on 2023-10-31"
+  }
+ ]
+}

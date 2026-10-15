@@ -1,0 +1,414 @@
+{
+ "frozen_on": "2026-10-15",
+ "code_base_commit": "928f76b (rules unchanged since 0b18ca6; research scripts only)",
+ "frozen": {
+  "rules_hash": "12a8e177290a29b6dfe518abbaea3b9493315145c437fd9018622facd630ef49",
+  "part_hashes": {
+   "engine": "73c19d57a8e61689b16a05fdaf4d9302805e885d2d693e88c4f459eb5587073f",
+   "backtest_costs_and_execution": "c5d1727d3169c050ac7ec75d27b30284de680716d476495fad96e09b0fa58933",
+   "app_source_sha256": "8e44d0fe3f1270f9a95d2ef88fb858bf17cef86d74a47e32bee01d17ed6cc94d"
+  },
+  "engine": {
+   "feed_delay": 0,
+   "planning": {
+    "min_rr": 2.0,
+    "min_rr_by_mode": {
+     "day": null,
+     "swing": null
+    },
+    "entry_zone_atr": {
+     "day": 0.25,
+     "swing": 0.5
+    },
+    "stop_buffer_atr": {
+     "day": 0.1,
+     "swing": 0.25
+    },
+    "min_risk_atr": 0.05,
+    "max_risk_atr": {
+     "day": 3.0,
+     "swing": 3.0
+    },
+    "level_clearance_atr": 0.05,
+    "t2_min_gap_atr": 0.25,
+    "atr_projection": {
+     "day": 2.0,
+     "swing": 3.0
+    },
+    "atr_extension": {
+     "day": 1.0,
+     "swing": 1.5
+    },
+    "max_conflicts": 2,
+    "max_spread_pct": {
+     "day": 0.25,
+     "swing": 0.75
+    },
+    "partial_volume_policy": "unverified",
+    "max_entry_age_candles": {
+     "15Min": 2,
+     "1Day": 3,
+     "1Week": 1,
+     "5Min": 3
+    },
+    "weights": {
+     "higher_timeframe": 15,
+     "level_strength": 15,
+     "price_action": 20,
+     "relative_volume": 10,
+     "risk_reward": 25,
+     "trend_structure": 15
+    },
+    "conflict_penalty": 10.0
+   },
+   "strategy": {
+    "gates": {
+     "entry_start_minutes": 5,
+     "halt_gap_slots": 3,
+     "max_bar_range_atr": 4.0,
+     "max_missing_bar_ratio": 0.2,
+     "max_open_gap_daily_atr": 3.0,
+     "min_avg_dollar_volume": 20000000,
+     "min_session_bars": 2,
+     "stop_entries_minutes_before_close": 30
+    },
+    "breakout_retest": {
+     "breakout_buffer_atr": 0.1,
+     "confirm_window_bars": 3,
+     "enabled": true,
+     "min_breakout_rel_volume": 1.5,
+     "reference_zone_half_width_atr": 0.1,
+     "retest_tolerance_atr": 0.15,
+     "retest_window_bars": 12
+    },
+    "opening_range_breakout": {
+     "breakout_buffer_atr": 0.05,
+     "enabled": true,
+     "latest_breakout_time": "11:30",
+     "max_range_daily_atr": 1.2,
+     "measured_move_multiples": [
+      1.0,
+      2.0
+     ],
+     "min_range_daily_atr": 0.1,
+     "min_rel_volume": 1.2,
+     "range_minutes": 15,
+     "stop_mode": "midpoint"
+    },
+    "liquidity_sweep": {
+     "confirm_close_position": 0.5,
+     "enabled": true,
+     "include_intraday_swings": true,
+     "max_penetration_atr": 1.0,
+     "min_level_age_bars": 6,
+     "min_penetration_atr": 0.05,
+     "return_window_bars": 3,
+     "watch_distance_atr": 0.3
+    },
+    "trend_pullback": {
+     "enabled": true,
+     "max_violation_atr": 0.25,
+     "min_pullback_bars": 2,
+     "require_htf_alignment": true,
+     "touch_lookback_bars": 3,
+     "touch_tolerance_atr": 0.1,
+     "watch_distance_atr": 0.3
+    },
+    "sr_rejection": {
+     "allow_engulfing": true,
+     "confirm_window_bars": 2,
+     "enabled": true,
+     "max_close_position": 0.4,
+     "min_wick_share": 0.5,
+     "min_wick_to_body": 2.0,
+     "min_zone_strength": 35
+    }
+   },
+   "swing": {
+    "gates": {
+     "max_extension_atr": 1.5,
+     "max_trigger_age": {
+      "1Day": 3,
+      "1Week": 1
+     },
+     "max_trigger_range_atr": 4.0,
+     "min_avg_dollar_volume": 20000000,
+     "min_daily_history": 220
+    },
+    "daily_breakout": {
+     "breakout_buffer_atr": 0.1,
+     "enabled": true,
+     "min_rel_volume": 1.4,
+     "min_zone_age": {
+      "1Day": 10,
+      "1Week": 6
+     },
+     "require_htf_not_opposed": true,
+     "watch_distance_atr": 1.0
+    },
+    "trend_continuation": {
+     "enabled": true,
+     "max_close_violation_atr": 0.5,
+     "min_pullback_atr": 1.0,
+     "pullback_lookback": {
+      "1Day": 5,
+      "1Week": 3
+     },
+     "touch_tolerance_atr": 0.3,
+     "watch_distance_atr": 0.5
+    },
+    "consolidation_breakout": {
+     "breakout_buffer_atr": 0.1,
+     "edge_tolerance_atr": 0.3,
+     "enabled": true,
+     "max_bars": {
+      "1Day": 40,
+      "1Week": 20
+     },
+     "max_range_atr": 3.5,
+     "measured_move_multiples": [
+      1.0,
+      2.0
+     ],
+     "min_bars": {
+      "1Day": 10,
+      "1Week": 6
+     },
+     "min_rel_volume": 1.3,
+     "min_touches": 2,
+     "stop_mode": "breakout_candle"
+    },
+    "sr_reversal": {
+     "allow_engulfing": true,
+     "confirm_window": {
+      "1Day": 2,
+      "1Week": 1
+     },
+     "enabled": true,
+     "max_close_position": 0.4,
+     "max_penetration_atr": 0.5,
+     "min_wick_share": 0.45,
+     "min_wick_to_body": 1.5,
+     "watch_distance_atr": 0.5
+    },
+    "trend_reversal": {
+     "ema_slope_bars": 5,
+     "enabled": true,
+     "lookback": {
+      "1Day": 80,
+      "1Week": 40
+     },
+     "require_ema_shift": true
+    }
+   },
+   "volume_label": "IEX",
+   "volume_scope": "partial"
+  },
+  "backtest_costs_and_execution": {
+   "entry_delay_bars": 0,
+   "half_spread_bps": {
+    "day": 2.0,
+    "swing": 2.0
+   },
+   "slippage_bps": {
+    "day": 3.0,
+    "swing": 5.0
+   },
+   "commission_per_share": 0.005,
+   "sec_fee_rate": 2.78e-05,
+   "finra_taf_per_share": 0.000166,
+   "short_borrow_bps_per_year": 100.0,
+   "starting_capital": 100000.0,
+   "max_position_pct": 25.0,
+   "max_leverage": 1.0,
+   "max_open_positions": 10,
+   "tick": 0.01,
+   "exit_policy": "t1",
+   "respect_entry_zone": true,
+   "max_hold_bars": {
+    "day": null,
+    "swing": 20
+   },
+   "one_position_per_setup": true,
+   "risk_per_trade_pct": 1.0,
+   "in_sample_fraction": 0.7,
+   "walk_forward_folds": 4,
+   "quality_thresholds": [
+    0,
+    50,
+    60,
+    70
+   ],
+   "min_trades_for_evidence": 100,
+   "min_oos_trades_for_evidence": 30,
+   "exhaustive": false
+  },
+  "app_source_sha256": "9f3a6a97f0622bc107ae9c559adac5fa7dae926e118fa0df98dc2cbb20d2945b"
+ },
+ "frozen_cost_assumptions": "BacktestConfig defaults: per side half-spread 2 bps + slippage 3 bps (day) / 5 bps (swing), commission $0.005/share, SEC fee 27.8 per $1M sold, FINRA TAF $0.000166/share sold, short borrow 1 %/yr. Volume policy: IEX intraday volume with point-in-time SIP overlay (16-minute embargo), partial_volume_policy=unverified.",
+ "no_tuning": "No strategy, planning, cost or volume parameter is changed on the basis of these results. Every run checks the rules hash (research/freeze.py check) and refuses to run if it differs.",
+ "historical_validation": {
+  "universe_rule": "research/universe.py: S&P 500 members on T0 (point-in-time file), minus the 9 watchlist companies; median SIP dollar volume over the 126 sessions to T0; close >= $10 on T0; >= 95 % session coverage; one share class per company; take by liquidity rank, at most 7 per GICS sector, until 50. The list is fixed at T0: names are kept after leaving the index and drop out only when their candles end (delisting, acquisition or ticker change).",
+  "day": {
+   "t0": "2023-10-31",
+   "period": [
+    "2023-11-01",
+    "2024-10-31"
+   ],
+   "runs": [
+    [
+     "2023-11-01",
+     "2024-04-30"
+    ],
+    [
+     "2024-05-01",
+     "2024-10-31"
+    ]
+   ],
+   "symbols": [
+    "GOOGL",
+    "NFLX",
+    "AVGO",
+    "XOM",
+    "UNH",
+    "ADBE",
+    "JPM",
+    "LLY",
+    "INTC",
+    "V",
+    "BAC",
+    "DIS",
+    "CVX",
+    "JNJ",
+    "BRK.B",
+    "CRM",
+    "BA",
+    "PYPL",
+    "MA",
+    "HD",
+    "ORCL",
+    "COST",
+    "PFE",
+    "MU",
+    "QCOM",
+    "PEP",
+    "PG",
+    "WMT",
+    "KO",
+    "NKE",
+    "BKNG",
+    "CMCSA",
+    "MRK",
+    "TMO",
+    "VZ",
+    "MCD",
+    "C",
+    "ABBV",
+    "TMUS",
+    "ABNB",
+    "CAT",
+    "OXY",
+    "TGT",
+    "NEE",
+    "SBUX",
+    "DE",
+    "T",
+    "COP",
+    "LOW",
+    "UPS"
+   ],
+   "untouched_because": "Day-mode development used 2024-11-01 to 2026-04-30 (watchlist only); no day-mode backtest in this research touched any date before 2024-11-01 and none touched these 50 tickers. Disjoint in both time and tickers."
+  },
+  "swing": {
+   "t0": "2021-06-30",
+   "period": [
+    "2021-07-01",
+    "2026-04-30"
+   ],
+   "runs": [
+    [
+     "2021-07-01",
+     "2026-04-30"
+    ]
+   ],
+   "symbols": [
+    "GOOGL",
+    "BA",
+    "JPM",
+    "V",
+    "NFLX",
+    "PYPL",
+    "BAC",
+    "INTC",
+    "DIS",
+    "XOM",
+    "MU",
+    "BRK.B",
+    "C",
+    "CRM",
+    "MA",
+    "JNJ",
+    "QCOM",
+    "HD",
+    "T",
+    "WMT",
+    "UNH",
+    "PG",
+    "ADBE",
+    "VIAC",
+    "CVX",
+    "PFE",
+    "VZ",
+    "GM",
+    "AMAT",
+    "TWTR",
+    "CSCO",
+    "MRK",
+    "NKE",
+    "KO",
+    "F",
+    "FCX",
+    "GE",
+    "TMO",
+    "CCL",
+    "COST",
+    "BKNG",
+    "ABBV",
+    "BMY",
+    "PEP",
+    "LOW",
+    "CAT",
+    "AAL",
+    "NEE",
+    "TGT",
+    "UAL"
+   ],
+   "untouched_because": "No swing backtest touched these tickers. Not disjoint in calendar time: swing development used the same 2021-07 to 2026-04 calendar on the 9 watchlist tickers, because IEX history starts 2020-07-27 and swing lookbacks need about a year. Disjoint in tickers only; a market-wide regime effect is shared."
+  },
+  "sealed": "2026-05-01 onward stays sealed (not used here).",
+  "primary_endpoint": "Net expectancy in R per trade (frozen costs), per mode, with a seeded bootstrap 95 % CI (5,000 resamples, seed 1). Expectation from development: day net about -0.47R, gross about +0.04R (CI includes 0).",
+  "secondary_preregistered": [
+   "gross expectancy (zero costs)",
+   "H2: higher timeframe aligned (quality component higher_timeframe > 0)",
+   "H3: quality score >= 70",
+   "H1 cost scenarios: costs scaled x0, x0.25, x0.5, x1, x2 (x0.2 is roughly the measured NBBO cost)"
+  ],
+  "reporting": "By mode, strategy, timeframe, ticker, sector and direction: trades, win rate (Wilson CI), net expectancy (bootstrap CI), profit factor, max drawdown of cumulative R (1R per trade, ordered by exit time), cost sensitivity. Groups under 30 trades are flagged as anecdotal. Multiple comparisons: per-group CIs are descriptive; only the primary and secondary endpoints are confirmatory (Holm across the secondary ones)."
+ },
+ "forward_paper_test": {
+  "symbols": [
+   "SPY",
+   "QQQ",
+   "NVDA",
+   "TSLA",
+   "AAPL",
+   "AMD",
+   "MSFT",
+   "META",
+   "AMZN"
+  ],
+  "starts": "2026-10-16 (first session after the freeze); never mixed with the historical validation.",
+  "method": "research/forward_test.py replays each completed session with the frozen engine (same replay, entry-eligibility and volume rules as the live scanner; parity-tested) and appends the closed trades to research/validation/forward_ledger.jsonl. Entries are only appended, never rewritten. No orders are sent to any broker, paper or live.",
+  "note": "The 2026-05-01 to 2026-10-15 sealed window is not part of the forward test."
+ }
+}
