@@ -112,7 +112,9 @@ Allow private networks only.
   the address. The dashboard has no login, so only do this on a network you trust.
 - **Away from home:** the dashboard must be reachable over the internet. A private option
   is a personal VPN such as Tailscale (free for personal use), which links your phone and
-  computer without making anything public. A hosted server also works but costs money and
+  computer without making anything public. Add the name or 100.x.y.z address you open it by to
+  `ALLOWED_HOSTS` in `backend/.env`; the backend only answers to `localhost` and
+  private-network addresses by default. A hosted server also works but costs money and
   needs a login added first. See [DEPLOYMENT.md](DEPLOYMENT.md). Neither is set up.
 
 ## Does it keep running?

@@ -14,10 +14,10 @@ import time
 from collections.abc import AsyncIterator
 from datetime import date, datetime, timedelta, timezone
 
-from fastapi import Body, FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
 from .ai import budget as ai_budget
@@ -51,7 +51,7 @@ from .options import AlpacaOptionsSource, capabilities, load_options_config
 from .options.analysis import analyze as analyze_options
 from .options.analysis import strike_bounds
 from .scanner.engine import OpportunityScanner, filter_rows
-from . import rawcache
+from . import guard, rawcache
 from .explain import explain_setup
 from .universe.scanner import UniverseScanner, next_wait
 from .validation import (STATUSES as VALIDATION_STATUSES, for_strategy as validation_for,
@@ -876,6 +876,15 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     app = FastAPI(title="TradeScope AI", version="0.2.0", lifespan=lifespan)
     app.add_middleware(CORSMiddleware, allow_origins=settings.cors_origins,
                        allow_methods=["*"], allow_headers=["*"])
+    allowed_hosts = guard.extra_hosts()
+
+    @app.middleware("http")
+    async def _guard(request: Request, call_next):
+        reason = guard.reject_reason(request.headers, allowed_hosts)
+        if reason:
+            return JSONResponse(status_code=403,
+                                content={"detail": {"code": "FORBIDDEN", "message": reason}})
+        return await call_next(request)
 
     def svc() -> Service:
         return app.state.service
@@ -1335,6 +1344,10 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
     def journal_delete_fill(account: str, trade_id: int, fill_id: int) -> dict:
         return _journal(svc().trade_log.delete_fill, account, trade_id, fill_id)
 
+    def _csv_text(v: str) -> str:
+        """Free text in a CSV cell, defused so spreadsheets do not run it as a formula."""
+        return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+
     @app.get("/api/journal/{account}/export.csv")
     def journal_csv(account: str) -> Response:
         data = _journal(svc().trade_log.list, account)
@@ -1345,7 +1358,8 @@ def create_app(service: Service | None = None, run_scanner: bool = True) -> Fast
                     "trade_realized_net", "trade_r_multiple"])
         for t in data["trades"]:
             for f in t["fills"]:
-                w.writerow([t["id"], account, t["ticker"], t["direction"], t["strategy"] or "",
+                w.writerow([t["id"], account, t["ticker"], t["direction"],
+                            _csv_text(t["strategy"] or ""),
                             t["pnl"]["status"], f["id"], f["side"], f["quantity"], f["price"],
                             f["fees"], datetime.fromtimestamp(f["executed_at"], NY).isoformat(),
                             t["pnl"].get("realized_net"), t["pnl"].get("r_multiple")])

@@ -18,6 +18,7 @@ def _isolated_raw_cache(tmp_path, monkeypatch):
     monkeypatch.setenv("RAW_CACHE_PERSIST", "false")
     monkeypatch.setenv("UNIVERSE_SCAN_INTERVAL_SECONDS", "0")
     monkeypatch.setenv("UNIVERSE_RETRY_PAUSE_SECONDS", "0")
+    monkeypatch.setenv("ALLOWED_HOSTS", "testserver")  # TestClient's Host header
 
 
 # Demo data ends at the last completed session before this instant (Tue 2026-03-10 close).

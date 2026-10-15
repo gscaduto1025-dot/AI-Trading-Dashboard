@@ -3,7 +3,9 @@
 #   ./scripts/start.sh            dashboard on http://localhost:3000 (this computer only)
 #   ./scripts/start.sh --lan      also reachable from your phone on the same Wi-Fi
 # The backend always listens on 127.0.0.1 only; the browser reaches it through the
-# dashboard's /api proxy, so the API and your keys are never exposed on the network.
+# dashboard's /api proxy. Your API keys never leave this computer, but with --lan anyone on
+# your Wi-Fi can open the dashboard and use its API (there is no login), so use --lan only
+# on a network you trust.
 # First run installs dependencies. Ctrl+C stops both servers.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -19,7 +21,7 @@ if [ ! -x "$ROOT/backend/.venv/bin/uvicorn" ]; then
 fi
 if [ ! -d "$ROOT/frontend/node_modules" ]; then
   echo "==> Installing frontend dependencies"
-  (cd "$ROOT/frontend" && npm install)
+  (cd "$ROOT/frontend" && npm ci)
 fi
 if [ ! -f "$ROOT/backend/.env" ]; then
   cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
@@ -35,11 +37,14 @@ fi
 echo "==> Building the dashboard (about a minute)"
 (cd "$ROOT/frontend" && BACKEND_URL=http://127.0.0.1:$API_PORT npm run build >/dev/null)
 
-cleanup() { kill 0 2>/dev/null || true; }
+PIDS=()
+cleanup() { [ ${#PIDS[@]} -eq 0 ] || kill "${PIDS[@]}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-(cd "$ROOT/backend" && .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" --workers 1) &
-(cd "$ROOT/frontend" && BACKEND_URL=http://127.0.0.1:$API_PORT npx next start --hostname "$HOST" --port "$PORT") &
+(cd "$ROOT/backend" && exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" --workers 1) &
+PIDS+=($!)
+(cd "$ROOT/frontend" && BACKEND_URL=http://127.0.0.1:$API_PORT exec ./node_modules/.bin/next start --hostname "$HOST" --port "$PORT") &
+PIDS+=($!)
 
 echo "==> Dashboard: http://localhost:$PORT"
 if [ "$HOST" = 0.0.0.0 ]; then

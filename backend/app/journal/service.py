@@ -7,8 +7,10 @@ executed by the app.
 
 from __future__ import annotations
 
+import math
 import re
 import sqlite3
+import time
 from datetime import datetime
 
 from ..data.base import DataError
@@ -28,15 +30,27 @@ def check_account(account: str) -> str:
     return account
 
 
+TS_MIN = 631_152_000  # 1990-01-01: earlier (or millisecond) times are input mistakes
+MAX_FILLS = 500
+
+
 def _ts(v) -> int:
-    if isinstance(v, (int, float)) and not isinstance(v, bool):
-        return int(v)
-    if isinstance(v, str):
+    ts = None
+    if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+        ts = int(v)
+    elif isinstance(v, str):
         try:
-            return int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp())
+            ts = int(datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp())
         except ValueError:
             pass
-    raise JournalError("executed_at must be a unix time or an ISO-8601 timestamp")
+    if ts is None:
+        raise JournalError("executed_at must be a unix time or an ISO-8601 timestamp")
+    # Stored times must stay displayable: one out-of-range fill used to break the whole
+    # journal listing, CSV export and performance view.
+    if not TS_MIN <= ts <= time.time() + 86_400:
+        raise JournalError("executed_at must be between 1990 and now, in seconds "
+                           "(not milliseconds)")
+    return ts
 
 
 def _num(v, name, required=False):
@@ -48,6 +62,8 @@ def _num(v, name, required=False):
         x = float(v)
     except (TypeError, ValueError):
         raise JournalError(f"{name} must be a number") from None
+    if not math.isfinite(x):
+        raise JournalError(f"{name} must be a finite number")
     return x
 
 
@@ -115,6 +131,8 @@ class TradeLog:
         if not SYMBOL_RE.match(ticker):
             raise JournalError("ticker is not a valid symbol")
         direction = str(body.get("direction", "")).upper()
+        if len(body.get("fills") or []) > MAX_FILLS:
+            raise JournalError(f"at most {MAX_FILLS} fills per request")
         fills = [_fill(f) for f in body.get("fills") or []]
         if not fills:
             raise JournalError("record at least the opening fill")

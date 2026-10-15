@@ -15,14 +15,18 @@ if [ ! -d "$ROOT/frontend/node_modules" ]; then
 fi
 if [ ! -f "$ROOT/backend/.env" ]; then
   cp "$ROOT/backend/.env.example" "$ROOT/backend/.env"
+  chmod 600 "$ROOT/backend/.env"
   echo "==> Created backend/.env (DEMO DATA mode until you add API keys)"
 fi
 
-cleanup() { kill 0 2>/dev/null || true; }
+PIDS=()
+cleanup() { [ ${#PIDS[@]} -eq 0 ] || kill "${PIDS[@]}" 2>/dev/null || true; }
 trap cleanup EXIT INT TERM
 
-(cd "$ROOT/backend" && .venv/bin/uvicorn app.main:app --reload --port 8000) &
-(cd "$ROOT/frontend" && npm run dev -- --port 3000) &
+(cd "$ROOT/backend" && exec .venv/bin/uvicorn app.main:app --reload --port 8000) &
+PIDS+=($!)
+(cd "$ROOT/frontend" && exec ./node_modules/.bin/next dev --hostname 127.0.0.1 --port 3000) &
+PIDS+=($!)
 
 echo "==> Backend:  http://localhost:8000/docs"
 echo "==> Dashboard: http://localhost:3000"
